@@ -42,6 +42,59 @@ MODULE_MAP = {
 }
 
 
+def _detect_runtime_problem() -> str | None:
+    """返回缺失的硬依赖名；都可用则返回 None。
+
+    numpy/av 是阶段一音频管线的强制本地依赖（av 自带 ffmpeg 免系统依赖）。
+    faster-whisper 为可选 provider，缺失时由 available() 优雅降级（显示 ⬜），不在此门禁。
+    """
+    for mod in ("numpy", "av"):
+        try:
+            __import__(mod)
+        except ImportError:
+            return mod
+    return None
+
+
+def _venv_python() -> Path | None:
+    """找到与脚本同目录的隔离 venv 解释器（跨平台）。"""
+    base = SCRIPT_DIR / ".venv"
+    cand = base / "Scripts" / "python.exe" if sys.platform.startswith("win") else base / "bin" / "python"
+    return cand if cand.is_file() else None
+
+
+def ensure_runtime() -> None:
+    """在导入任何重型依赖前，保证运行环境就绪。
+
+    - 裸 python 缺 numpy/av 时：优先自动复用到同目录 .venv（仅一次，带 env 防递归标记）；
+    - 否则给出明确 install 指引并干净退出（exit 2），避免抛出裸 ModuleNotFoundError traceback。
+    """
+    missing = _detect_runtime_problem()
+    if missing is None:
+        return
+
+    # 尝试一次自动复用同目录 venv（防递归：已复刻进程不再二次复刻）
+    if os.environ.get("INFO_EXTRACT_REEXEC") != "1":
+        vp = _venv_python()
+        if vp is not None:
+            os.environ["INFO_EXTRACT_REEXEC"] = "1"
+            try:
+                os.execv(str(vp), [str(vp), str(Path(__file__).resolve()), *sys.argv[1:]])
+            except OSError:
+                pass  # 落到下面的友好提示
+
+    print(
+        "❌ 未检测到运行环境依赖（缺少 '" + (missing or "numpy/av") + "'）。\n"
+        "info-extract 依赖隔离在 scripts/.venv 中，请先安装运行环境：\n"
+        "  bash install.sh            # 或：python install.py\n"
+        "随后可用 venv 解释器运行：\n"
+        "  scripts/.venv/bin/python scripts/router.py --check\n"
+        "（也可直接裸 python 运行，脚本会自动复用同目录 .venv；若 .venv 不存在则需先 install。）",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+
 def load_module(source_type: str):
     mod_path, cls_name = MODULE_MAP[source_type]
     mod = importlib.import_module(mod_path)
@@ -85,6 +138,7 @@ def run_check() -> int:
 
 
 def main(argv: List[str] | None = None) -> int:
+    ensure_runtime()  # 门禁：缺依赖自动复用 venv 或友好退出（见 ensure_runtime）
     parser = argparse.ArgumentParser(
         prog="info-extract",
         description="信息抽取技能主入口：音频转录（阶段一）已实现；OCR/视觉/文档/视频规划中。",
