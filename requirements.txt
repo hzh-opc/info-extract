@@ -1,0 +1,15 @@
+# info-extract 运行时依赖（阶段一：音频转录）
+# Python 版本：标准 CPython >=3.10 且 <3.14（onnxruntime 无 free-threaded wheel），锁定 3.13
+# 安装：见 install.py / install.sh（自动建隔离 venv 并 pip install -r requirements.txt）
+
+# 数组/数值
+numpy>=1.24
+# 音频解码：PyAV 自带 ffmpeg 库，零系统依赖（本机实测无系统 ffmpeg，故不走系统 ffmpeg 二进制）
+av>=11.0
+# 默认本地转录引擎：faster-whisper（CTranslate2，跨平台、完全离线、数据不出本机）
+faster-whisper>=1.0
+
+# 阶段三+ 将补充（按需，不在此阶段安装）：
+# rapidocr>=3.9            # 本地 OCR（模型随 wheel 捆绑，完全离线）
+# onnxruntime>=1.19        # rapidocr 推理后端
+# pypdfium2>=4.30          # 图片型 PDF 页面渲染

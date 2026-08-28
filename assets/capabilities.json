@@ -1,0 +1,31 @@
+{
+  "skill": "info-extract",
+  "version": "0.1.0",
+  "description": "跨智能体、跨平台的信息抽取技能（本地优先）。当前已实现音频转录；OCR/视频/画面解读规划中。",
+  "capabilities": {
+    "speech_transcription": {
+      "ready": true,
+      "phase": "阶段一（已实现）",
+      "purpose": "音频 / 语音转文字（ASR）：本地 Whisper 转录 + 时间戳，支持长音频 VAD 分块、外语/方言轻提示、批量 + 聚合报告",
+      "keywords": ["语音", "转录", "转写", "speech", "transcription", "asr", "音频转文字", "听写", "字幕生成"],
+      "fallback": "ask",
+      "fallback_note": "缺失时请用户提供文字稿，或安装语音转录技能"
+    },
+    "ocr": {
+      "ready": false,
+      "phase": "阶段三（规划中）",
+      "purpose": "图片 / 扫描件 / 截图转文字 + 画面解读（rapidocr + onnxruntime，PP-OCRv6）",
+      "keywords": ["ocr", "光学字符", "图片转文字", "图像文字", "识别文字", "image to text", "截图转文字", "扫描件"],
+      "fallback": "ask",
+      "fallback_note": "规划中：命中后给出清晰提示，不静默失败"
+    },
+    "video_transcript": {
+      "ready": false,
+      "phase": "阶段二/五（规划中）",
+      "purpose": "视频转文字 / 字幕 / 文案提取 + 画面识别（ffmpeg 抽音轨复用音频转录）",
+      "keywords": ["视频", "文案提取", "字幕", "视频转文字", "video", "transcript", "口播", "短视频文案", "视频文稿"],
+      "fallback": "ask",
+      "fallback_note": "规划中：命中后给出清晰提示，不静默失败"
+    }
+  }
+}

@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""info-extract · 输入发现与类型识别（D8 触发范围）。
+
+支持四类输入（方案 §0.5）：
+① 图片（含图片型文档）            → OCR + 画面解读
+② 文档中含图片/媒体需单独识别      → 抽取后逐张/逐段路由（阶段三/四）
+③ 音频（需转录）                  → 音频转录（阶段一，已实现）
+④ 视频（需提取文案或识别画面）    → 视频文案/画面（阶段二/四/五）
+
+本模块只做「发现 + 分类」，不触发任何重型依赖；重型模块由 router 按类型惰性载入。
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Dict, List, Tuple
+
+from modules.base import SourceType
+
+# ---- 扩展名分类表 ----
+AUDIO_EXT = {
+    ".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus",
+    ".wma", ".aiff", ".aif", ".caf", ".webm",  # 注意：.mp4/.mov 等归视频
+}
+VIDEO_EXT = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".wmv", ".m4v", ".ts"}
+IMAGE_EXT = {
+    ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff", ".tif", ".webp", ".heic", ".heif",
+}
+# 复合文档（②）：需先抽取内嵌媒体再路由（阶段三/四落地）
+DOC_EXT = {
+    ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".epub", ".odt", ".rtf",
+}
+
+# 已知可处理扩展名 → 来源类型
+_EXT_TO_TYPE: Dict[str, str] = {}
+for _e in AUDIO_EXT:
+    _EXT_TO_TYPE[_e] = SourceType.TRANSCRIPT
+for _e in VIDEO_EXT:
+    _EXT_TO_TYPE[_e] = SourceType.VIDEO_ONLINE  # 视频统一走 video 模块（阶段二/四/五）
+for _e in IMAGE_EXT:
+    _EXT_TO_TYPE[_e] = SourceType.OCR  # 图片先路由 OCR（阶段三）；画面解读由 OCR 模块协同
+for _e in DOC_EXT:
+    _EXT_TO_TYPE[_e] = SourceType.DOC_EXTRACT  # 复合文档抽取（阶段三落地）
+
+
+def classify(path: str) -> str:
+    """按扩展名判定来源类型；未知返回空串。"""
+    ext = Path(path).suffix.lower()
+    return _EXT_TO_TYPE.get(ext, "")
+
+
+def is_supported(path: str) -> bool:
+    return bool(classify(path))
+
+
+def discover(inputs: List[str], recursive: bool = False) -> List[Tuple[str, str]]:
+    """展开目录 / glob / 多文件，返回 [(绝对路径, 来源类型), ...]，仅保留已知可处理类型。
+
+    不支持格式（审阅 I）：明确排除并交由 router 报告，绝不静默放过。
+    """
+    found: List[Tuple[str, str]] = []
+    unsupported: List[str] = []
+    seen = set()
+    for raw in inputs:
+        p = Path(raw).expanduser()
+        if p.is_dir():
+            pattern = "**/*" if recursive else "*"
+            entries = sorted(p.glob(pattern))
+        else:
+            # 支持 glob（如 "*.mp3"）
+            entries = sorted(p.parent.glob(p.name)) if any(ch in raw for ch in "*?[]") else ([p] if p.exists() else [])
+        for e in entries:
+            if not e.is_file():
+                continue
+            t = classify(str(e))
+            if not t:
+                unsupported.append(str(e))
+                continue
+            ap = str(e.resolve())
+            if ap in seen:
+                continue
+            seen.add(ap)
+            found.append((ap, t))
+    return found, unsupported
+
+
+def format_seconds(sec: float) -> str:
+    """把秒格式化为 [HH:MM:SS] 或 [MM:SS]，用于文本通道时间戳。"""
+    sec = int(round(sec))
+    h, rem = divmod(sec, 3600)
+    m, s = divmod(rem, 60)
+    if h > 0:
+        return f"[{h:02d}:{m:02d}:{s:02d}]"
+    return f"[{m:02d}:{s:02d}]"
+
+
+__all__ = [
+    "AUDIO_EXT", "VIDEO_EXT", "IMAGE_EXT", "DOC_EXT",
+    "classify", "is_supported", "discover", "format_seconds",
+]
