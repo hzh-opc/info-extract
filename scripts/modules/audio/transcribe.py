@@ -29,7 +29,6 @@ from modules.audio.output import write_outputs
 from modules.audio.providers import FasterWhisperProvider
 from modules.audio.vad import TARGET_SR, load_audio, vad_split
 from modules.base import ExtractResult, IModule, InfoExtractError, Segment, SourceType
-from provider_registry import get_provider
 from utils.hash_cache import ResultCache
 from utils.io import format_seconds
 
@@ -129,7 +128,12 @@ class AudioModule(IModule):
                 return r
 
         # 选 provider（D15 默认本地优先；显式指定优先；不可用则降级提示）
+        # 惰性 import 以打破与 provider_registry 的循环依赖
+        from provider_registry import get_provider
+
         provider_name = options.get("provider")
+        if provider_name in (None, "auto"):  # "auto" 视为未显式指定
+            provider_name = None
         provider = get_provider(SourceType.TRANSCRIPT, name=provider_name)
         if provider is None or not provider.available():
             raise InfoExtractError(

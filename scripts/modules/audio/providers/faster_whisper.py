@@ -15,7 +15,7 @@ import os
 from typing import List, Optional, Tuple
 
 from modules.audio.providers.base import ITranscriptProvider
-from modules.base import Segment
+from modules.base import InfoExtractError, Segment
 
 
 class FasterWhisperProvider(ITranscriptProvider):
@@ -45,33 +45,43 @@ class FasterWhisperProvider(ITranscriptProvider):
         device = opts.get("device", "auto")
         compute_type = opts.get("compute_type", "int8")
         cpu_threads = opts.get("cpu_threads", min(8, (os.cpu_count() or 4)))
-        model = WhisperModel(
-            model_size, device=device, compute_type=compute_type, cpu_threads=cpu_threads
-        )
-        segments_gen, info = model.transcribe(
-            audio,
-            language=language,
-            task=task or "transcribe",
-            beam_size=5,
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500),
-            word_timestamps=True,
-            condition_on_previous_text=True,
-        )
-        segments: List[Segment] = []
-        for seg in segments_gen:
-            words = [
-                {
-                    "word": w.word,
-                    "start": float(w.start),
-                    "end": float(w.end),
-                    "prob": float(w.probability),
-                }
-                for w in (seg.words or [])
-            ]
-            segments.append(
-                Segment(start=float(seg.start), end=float(seg.end), text=seg.text, words=words)
+        try:
+            model = WhisperModel(
+                model_size, device=device, compute_type=compute_type, cpu_threads=cpu_threads
             )
+            segments_gen, info = model.transcribe(
+                audio,
+                language=language,
+                task=task or "transcribe",
+                beam_size=5,
+                vad_filter=True,
+                vad_parameters=dict(min_silence_duration_ms=500),
+                word_timestamps=True,
+                condition_on_previous_text=True,
+            )
+            segments: List[Segment] = []
+            for seg in segments_gen:
+                words = [
+                    {
+                        "word": w.word,
+                        "start": float(w.start),
+                        "end": float(w.end),
+                        "prob": float(w.probability),
+                    }
+                    for w in (seg.words or [])
+                ]
+                segments.append(
+                    Segment(start=float(seg.start), end=float(seg.end), text=seg.text, words=words)
+                )
+        except Exception as e:  # 模型下载失败 / 加载失败 / 推理异常
+            raise InfoExtractError(
+                f"Whisper 转录失败：{e}",
+                recoverable=True,
+                hint=(
+                    "首次运行需从 HuggingFace 下载模型（默认 small ~466MB），请确认网络/代理可访问 hf.co；"
+                    "或改用 whisper.cpp 离线模型（设置 WHISPER_CPP_BIN 与 WHISPER_CPP_MODEL 环境变量）。"
+                ),
+            ) from e
         info_dict = {
             "detected_language": getattr(info, "language", language or "unknown"),
             "language_probability": round(float(getattr(info, "language_probability", 0.0)), 3),

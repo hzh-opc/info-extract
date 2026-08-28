@@ -118,13 +118,19 @@ def test_lang_hint():
 
 def test_hash_cache():
     print("[测试] 哈希缓存（D12·L）")
-    cache = ResultCache(REPO / "scripts" / ".cache_verify")
-    key_opts = {"lang": "zh", "task": "transcribe", "model": "small"}
-    cache.put("x.mp3", key_opts, {"source": "transcript", "text": "hi"})
-    got = cache.get("x.mp3", key_opts)
-    check("缓存写入/读取命中", got is not None and got["text"] == "hi")
-    miss = cache.get("x.mp3", {**key_opts, "model": "medium"})
-    check("选项变更→缓存未命中", miss is None)
+    cache_dir = REPO / "scripts" / ".cache_verify"
+    cache = ResultCache(cache_dir)
+    tmp = REPO / "_verify_cache_test.bin"
+    tmp.write_bytes(b"\x00info-extract-cache-test\x01" * 100)
+    try:
+        key_opts = {"lang": "zh", "task": "transcribe", "model": "small"}
+        cache.put(str(tmp), key_opts, {"source": "transcript", "text": "hi"})
+        got = cache.get(str(tmp), key_opts)
+        check("缓存写入/读取命中", got is not None and got["text"] == "hi")
+        miss = cache.get(str(tmp), {**key_opts, "model": "medium"})
+        check("选项变更→缓存未命中", miss is None)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def test_output_contract():
@@ -165,13 +171,14 @@ def test_provider_registry():
 
 def test_full_pipeline_mock(fixture: Path):
     print("[测试] 全链路（mock 推理，绕过模型下载）")
-    import modules.audio.transcribe as at
     import provider_registry as pr
 
-    # 打桩 provider
+    # 打桩 provider（transcribe 在方法内惰性 import，故打模块属性即可生效）
     pr.get_provider = lambda cap, name=None: FakeProvider()
 
-    mod = at.AudioModule()
+    from modules.audio.transcribe import AudioModule
+
+    mod = AudioModule()
     # 非分块路径
     res = mod.run([str(fixture)], {"out_dir": str(REPO / "_verify_out"), "use_cache": False})
     check("返回 1 条结果", len(res) == 1)
@@ -205,18 +212,29 @@ def test_router_check():
 
 
 def test_router_audio_routing(fixture: Path):
-    print("[测试] router 音频路由（mock）")
-    import provider_registry as pr
-    pr.get_provider = lambda cap, name=None: FakeProvider()
-    r = subprocess.run(
-        [sys.executable, str(SCRIPTS / "router.py"), str(fixture), "--out",
-         str(REPO / "_verify_out"), "--no-cache"],
-        capture_output=True, text=True, cwd=str(REPO),
-    )
-    check("router 音频转录退出码 0", r.returncode == 0, r.stderr[-300:])
-    check("router 输出含引擎=fake", "fake" in r.stdout, r.stdout[-300:])
+    print("[测试] router 音频路由（mock，进程内）")
+    import json
     import shutil
-    shutil.rmtree(str(REPO / "_verify_out"), ignore_errors=True)
+
+    import provider_registry as pr
+    import router
+
+    pr.get_provider = lambda cap, name=None: FakeProvider()
+    out_dir = REPO / "_verify_out"
+    rc = 0
+    try:
+        router.main([str(fixture), "--out", str(out_dir), "--no-cache"])
+    except SystemExit as e:
+        rc = e.code or 0
+    check("router 音频路由退出码 0", rc == 0)
+    js = list(out_dir.glob("*.json"))
+    check("router 写出结构化结果", bool(js))
+    if js:
+        data = json.loads(js[0].read_text(encoding="utf-8"))
+        check("router 产出 provider=fake",
+              data.get("provider_meta", {}).get("provider") == "fake",
+              str(data.get("provider_meta")))
+    shutil.rmtree(str(out_dir), ignore_errors=True)
 
 
 def main():
