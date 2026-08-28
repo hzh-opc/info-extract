@@ -25,6 +25,8 @@ def _build_registry() -> Dict:
 
     return {
         SourceType.TRANSCRIPT: AUDIO_PROVIDERS,
+        # 阶段二视频文案复用同一套本地 Whisper provider（抽音轨后转录）
+        SourceType.VIDEO: AUDIO_PROVIDERS,
         # 以下在对应阶段落地后接入：
         # SourceType.OCR: [RapidOcrProvider, ...]
         # SourceType.VISION: [LocalVLMProvider, ...]

@@ -1,7 +1,7 @@
 {
   "skill": "info-extract",
   "version": "0.1.0",
-  "description": "跨智能体、跨平台的信息抽取技能（本地优先）。当前已实现音频转录；OCR/视频/画面解读规划中。",
+  "description": "跨智能体、跨平台的信息抽取技能（本地优先）。当前已实现音频转录与视频文案；OCR/画面解读规划中。",
   "capabilities": {
     "speech_transcription": {
       "ready": true,
@@ -20,12 +20,12 @@
       "fallback_note": "规划中：命中后给出清晰提示，不静默失败"
     },
     "video_transcript": {
-      "ready": false,
-      "phase": "阶段二/五（规划中）",
-      "purpose": "视频转文字 / 字幕 / 文案提取 + 画面识别（ffmpeg 抽音轨复用音频转录）",
-      "keywords": ["视频", "文案提取", "字幕", "视频转文字", "video", "transcript", "口播", "短视频文案", "视频文稿"],
+      "ready": true,
+      "phase": "阶段二（已实现）",
+      "purpose": "视频转文字 / 字幕 / 文案提取：本地 PyAV 抽音轨 → 复用 Whisper 转录；并支持 D13 讲解段关联帧抽取（规则信号命中即抽帧，标准库 PNG 写出，零新依赖）",
+      "keywords": ["视频", "文案提取", "字幕", "视频转文字", "video", "transcript", "口播", "短视频文案", "视频文稿", "讲解画面"],
       "fallback": "ask",
-      "fallback_note": "规划中：命中后给出清晰提示，不静默失败"
+      "fallback_note": "已实现（本地视频文件）；在线/加密视频受限场景见阶段五"
     }
   }
 }

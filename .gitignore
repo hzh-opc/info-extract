@@ -12,3 +12,6 @@ build/
 dist/
 # 本地产物（转录结果）
 *.transcript.out/
+
+# 安全扫描产物
+.codebuddy/

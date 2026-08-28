@@ -63,6 +63,89 @@ def _mean_confidence(segs: List[Segment]) -> Optional[float]:
     return round(float(np.mean(probs)), 3)
 
 
+def transcribe_core(
+    samples: np.ndarray,
+    sr: int,
+    path: str,
+    options: Dict[str, Any],
+    out_dir,  # 仅占位，写盘由调用方负责
+    cache,
+    model_size: str,
+    vad_threshold: int,
+    long_threshold: int,
+    source_type: str = SourceType.TRANSCRIPT,
+) -> "ExtractResult":
+    """阶段一 / 阶段二共用的核心转录：选 provider（D15）+ VAD 分块（D12·J）+ Whisper 转录。
+
+    返回已填好的 ExtractResult（含 text/segments/confidence/fields/provider_meta/media_ref），
+    **不负责写盘与缓存**——由调用方（AudioModule / VideoModule）统一落双通道 + 写缓存，
+    保证音频与视频产物的输出/缓存行为一致。
+    """
+    hint = options.get("lang") or Path(path).stem
+    language = parse_language_hint(hint) or options.get("language")
+    task = parse_task_hint(options.get("task") or hint) or options.get("task") or "transcribe"
+
+    # 选 provider（D15 默认本地优先；显式指定优先；不可用则降级提示）
+    from provider_registry import get_provider  # 惰性 import 打破循环依赖
+
+    provider_name = options.get("provider")
+    if provider_name in (None, "auto"):  # "auto" 视为未显式指定
+        provider_name = None
+    provider = get_provider(SourceType.TRANSCRIPT, name=provider_name)
+    if provider is None or not provider.available():
+        raise InfoExtractError(
+            "未找到可用的本地转录引擎（faster-whisper）。请先安装技能依赖。",
+            recoverable=True,
+            hint="运行技能目录下 install.py / install.sh 安装 faster-whisper 等依赖。",
+        )
+
+    # 加载 + 分块（D12·J）
+    duration = len(samples) / sr
+    chunks = vad_split(samples, sr, min_silence_ms=vad_threshold)
+    use_chunking = len(chunks) > 1 and duration > long_threshold
+
+    all_segs: List[Segment] = []
+    detected_lang = language or "auto"
+    if use_chunking:
+        for (s, e) in chunks:
+            chunk = samples[int(s * sr): int(e * sr)]
+            segs, info = provider.transcribe(
+                chunk, language=language, task=task, model_size=model_size
+            )
+            all_segs.extend(_offset_segments(segs, s))
+            detected_lang = info.get("detected_language") or detected_lang
+    else:
+        segs, info = provider.transcribe(
+            samples, language=language, task=task, model_size=model_size
+        )
+        all_segs.extend(segs)
+        detected_lang = info.get("detected_language") or detected_lang
+
+    confidence = _mean_confidence(all_segs)
+    text = "\n".join(seg.text.strip() for seg in all_segs if seg.text.strip())
+
+    return ExtractResult(
+        source=source_type,
+        text=text,
+        confidence=confidence,
+        fields={
+            "detected_language": detected_lang,
+            "task": task,
+            "model_size": model_size,
+            "duration_sec": round(duration, 2),
+            "num_segments": len(all_segs),
+            "chunked": use_chunking,
+        },
+        media_ref={
+            "path": path,
+            "duration": round(duration, 2),
+            "status": "ok",
+        },
+        provider_meta=provider.meta(),
+        segments=all_segs,
+    )
+
+
 class AudioModule(IModule):
     name = "audio"
     source_type = SourceType.TRANSCRIPT
@@ -127,66 +210,14 @@ class AudioModule(IModule):
                 r.media_ref["outputs"] = write_outputs(r, out_dir, Path(path).stem)
                 return r
 
-        # 选 provider（D15 默认本地优先；显式指定优先；不可用则降级提示）
-        # 惰性 import 以打破与 provider_registry 的循环依赖
-        from provider_registry import get_provider
-
-        provider_name = options.get("provider")
-        if provider_name in (None, "auto"):  # "auto" 视为未显式指定
-            provider_name = None
-        provider = get_provider(SourceType.TRANSCRIPT, name=provider_name)
-        if provider is None or not provider.available():
-            raise InfoExtractError(
-                "未找到可用的本地转录引擎（faster-whisper）。请先安装技能依赖。",
-                recoverable=True,
-                hint="运行技能目录下 install.py / install.sh 安装 faster-whisper 等依赖。",
-            )
-
-        # 加载 + 分块（D12·J）
+        # 加载音轨（D12·J 加载；分块 / 转录在 transcribe_core 内完成）
         samples, sr = load_audio(path, TARGET_SR)
-        duration = len(samples) / sr
-        chunks = vad_split(samples, sr, min_silence_ms=vad_threshold)
-        use_chunking = len(chunks) > 1 and duration > long_threshold
 
-        all_segs: List[Segment] = []
-        detected_lang = language or "auto"
-        if use_chunking:
-            for (s, e) in chunks:
-                chunk = samples[int(s * sr): int(e * sr)]
-                segs, info = provider.transcribe(
-                    chunk, language=language, task=task, model_size=model_size
-                )
-                all_segs.extend(_offset_segments(segs, s))
-                detected_lang = info.get("detected_language") or detected_lang
-        else:
-            segs, info = provider.transcribe(
-                samples, language=language, task=task, model_size=model_size
-            )
-            all_segs.extend(segs)
-            detected_lang = info.get("detected_language") or detected_lang
-
-        confidence = _mean_confidence(all_segs)
-        text = "\n".join(seg.text.strip() for seg in all_segs if seg.text.strip())
-
-        result = ExtractResult(
-            source=SourceType.TRANSCRIPT,
-            text=text,
-            confidence=confidence,
-            fields={
-                "detected_language": detected_lang,
-                "task": task,
-                "model_size": model_size,
-                "duration_sec": round(duration, 2),
-                "num_segments": len(all_segs),
-                "chunked": use_chunking,
-            },
-            media_ref={
-                "path": path,
-                "duration": round(duration, 2),
-                "status": "ok",
-            },
-            provider_meta=provider.meta(),
-            segments=all_segs,
+        # 核心转录（阶段一/二共用）：provider 选择 + VAD 分块 + Whisper 转录
+        result = transcribe_core(
+            samples, sr, path, options, out_dir, cache,
+            model_size, vad_threshold, long_threshold,
+            source_type=SourceType.TRANSCRIPT,
         )
         # 双通道输出（D11）
         outputs = write_outputs(result, out_dir, Path(path).stem)

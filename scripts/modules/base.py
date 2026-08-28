@@ -26,7 +26,8 @@ class SourceType:
     VISION = "vision"
     TRANSCRIPT = "transcript"
     DOC_EXTRACT = "doc_extract"
-    VIDEO_ONLINE = "video_online"
+    VIDEO = "video"            # 本地视频文件：阶段二（文案提取，复用音频转录）
+    VIDEO_ONLINE = "video_online"  # 在线/加密视频 URL：阶段五（受限场景）
 
 
 @dataclass

@@ -13,6 +13,8 @@
   python router.py 会议.m4a --model medium        # 升级模型（噪声明/方言）
   python router.py ./音频目录 --recursive --out ./结果
   python router.py --check                         # 查看能力/provider 可用性
+  python router.py 课程.mp4                         # 抽音轨→转录（阶段二，复用 Whisper）
+  python router.py 课程.mp4 --no-frames            # 仅文案，不抽讲解画面帧
   python router.py 图片.png                        # 当前阶段提示 OCR 规划中
 """
 
@@ -31,13 +33,14 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from modules.base import SourceType  # noqa: E402
-from utils.io import classify, discover  # noqa: E402
+from utils.io import classify, discover, is_url  # noqa: E402
 
 MODULE_MAP = {
     SourceType.TRANSCRIPT: ("modules.audio", "AudioModule"),
     SourceType.OCR: ("modules.ocr", "OCRModule"),
     SourceType.VISION: ("modules.vision", "VisionModule"),
     SourceType.DOC_EXTRACT: ("modules.doc_extract", "DocExtractModule"),
+    SourceType.VIDEO: ("modules.video", "VideoModule"),
     SourceType.VIDEO_ONLINE: ("modules.video_online", "VideoOnlineModule"),
 }
 
@@ -111,6 +114,7 @@ def build_options(args) -> Dict:
         "use_cache": not args.no_cache,
         "long_threshold": args.long_threshold,
         "vad_threshold": args.vad_threshold,
+        "extract_frames": not args.no_frames,
     }
 
 
@@ -121,7 +125,7 @@ def run_check() -> int:
     print("=== info-extract · 能力自检 ===")
     print("\n[本地 Provider 可用性]")
     for cap in [SourceType.TRANSCRIPT, SourceType.OCR, SourceType.VISION,
-                SourceType.DOC_EXTRACT, SourceType.VIDEO_ONLINE]:
+                SourceType.DOC_EXTRACT, SourceType.VIDEO, SourceType.VIDEO_ONLINE]:
         provs = available_providers(cap)
         if not provs:
             print(f"  - {cap}: (尚未接入)")
@@ -141,7 +145,7 @@ def main(argv: List[str] | None = None) -> int:
     ensure_runtime()  # 门禁：缺依赖自动复用 venv 或友好退出（见 ensure_runtime）
     parser = argparse.ArgumentParser(
         prog="info-extract",
-        description="信息抽取技能主入口：音频转录（阶段一）已实现；OCR/视觉/文档/视频规划中。",
+        description="信息抽取技能主入口：音频转录（阶段一）与视频文案（阶段二）已实现；OCR/视觉/文档规划中。",
     )
     parser.add_argument("inputs", nargs="*", help="待处理文件/目录/glob")
     parser.add_argument("--type", choices=["auto", *MODULE_MAP.keys()], default="auto",
@@ -156,6 +160,8 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--out", default=os.getcwd(), help="输出目录（默认当前目录）")
     parser.add_argument("-r", "--recursive", action="store_true", help="递归目录")
     parser.add_argument("--no-cache", action="store_true", help="禁用哈希缓存（D12·L）")
+    parser.add_argument("--no-frames", action="store_true",
+                        help="禁用视频讲解段关联帧抽取（D13）；仅产出文案")
     parser.add_argument("--long-threshold", type=int, default=600,
                         help="超过该秒数启用 VAD 分块（默认 600，D12·J）")
     parser.add_argument("--vad-threshold", type=int, default=700,
@@ -171,19 +177,27 @@ def main(argv: List[str] | None = None) -> int:
     if not args.inputs:
         parser.error("未提供输入；用 router.py --check 查看能力，或传入音频文件。")
 
+    # 类型识别：拆分 URL 与本地文件（URL 归在线/加密视频，阶段五）
+    url_inputs = [raw for raw in args.inputs if is_url(raw)]
+    file_inputs = [raw for raw in args.inputs if not is_url(raw)]
+
     # 类型识别
     if args.type == "auto":
-        found, unsupported = discover(args.inputs, recursive=args.recursive)
+        found, unsupported = discover(file_inputs, recursive=args.recursive)
     else:
-        # 强制类型：把所有存在的输入当作该类型
+        # 强制类型：把所有存在的本地文件当作该类型
         found = []
         unsupported = []
-        for raw in args.inputs:
+        for raw in file_inputs:
             p = Path(raw).expanduser()
             if p.exists() and p.is_file():
                 found.append((str(p.resolve()), args.type))
             else:
                 unsupported.append(str(p))
+
+    # URL 输入 → 在线/加密视频（阶段五；当前为占位提示，不静默失败）
+    for u in url_inputs:
+        found.append((u, SourceType.VIDEO_ONLINE))
 
     if not found and unsupported:
         print("⚠️ 无受支持的文件。以下格式当前未支持或对应能力规划中：")
@@ -237,6 +251,9 @@ def main(argv: List[str] | None = None) -> int:
                           f"置信度={r.confidence} 引擎={r.provider_meta.get('provider')}")
                     outs = mr.get("outputs", {})
                     print(f"   产出：{', '.join(f'{k}→{v}' for k, v in outs.items())}")
+                    if r.referenced_frame and r.referenced_frame.get("frames"):
+                        n = len(r.referenced_frame["frames"])
+                        print(f"   讲解画面帧(D13)：{n} 张（见输出目录 <stem>_frames/，默认落本地、不自动上云）")
                     if mr.get("report"):
                         print(f"   批量报告：{mr['report'].get('md')}")
                 elif mr.get("status") == "cached":

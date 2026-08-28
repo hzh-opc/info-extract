@@ -38,7 +38,7 @@ _EXT_TO_TYPE: Dict[str, str] = {}
 for _e in AUDIO_EXT:
     _EXT_TO_TYPE[_e] = SourceType.TRANSCRIPT
 for _e in VIDEO_EXT:
-    _EXT_TO_TYPE[_e] = SourceType.VIDEO_ONLINE  # 视频统一走 video 模块（阶段二/四/五）
+    _EXT_TO_TYPE[_e] = SourceType.VIDEO  # 本地视频文件 → 阶段二视频文案（复用音频转录）
 for _e in IMAGE_EXT:
     _EXT_TO_TYPE[_e] = SourceType.OCR  # 图片先路由 OCR（阶段三）；画面解读由 OCR 模块协同
 for _e in DOC_EXT:
@@ -53,6 +53,17 @@ def classify(path: str) -> str:
 
 def is_supported(path: str) -> bool:
     return bool(classify(path))
+
+
+# URL 正则（在线/加密视频场景，阶段五）：http(s)/ftp(s)
+import re as _re  # noqa: E402
+
+_URL_RE = _re.compile(r"^(?:https?|ftps?)://", _re.IGNORECASE)
+
+
+def is_url(s: str) -> bool:
+    """判定输入是否为在线视频 URL（非本地文件）。命中即路由到 video_online（阶段五）。"""
+    return bool(_URL_RE.match((s or "").strip()))
 
 
 def discover(inputs: List[str], recursive: bool = False) -> List[Tuple[str, str]]:
@@ -98,5 +109,5 @@ def format_seconds(sec: float) -> str:
 
 __all__ = [
     "AUDIO_EXT", "VIDEO_EXT", "IMAGE_EXT", "DOC_EXT",
-    "classify", "is_supported", "discover", "format_seconds",
+    "classify", "is_supported", "discover", "is_url", "format_seconds",
 ]

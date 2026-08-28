@@ -1,5 +1,30 @@
 # CHANGELOG · info-extract
 
+## [0.2.0] — 2026-08-28 · 阶段二落地（视频文案提取 + D13 讲解段关联帧）
+
+### 新增
+- **阶段二 · 视频文案提取（本地视频文件，已实现）**：
+  - `modules/video/`：`VideoModule` + `frames.py`。从视频容器用 PyAV 抽取音轨，复用阶段一 Whisper 转录管线（`transcribe_core`），产出与音频一致的双通道（txt/srt/json/md）。
+  - 路由：本地视频文件（.mp4/.mov/.mkv…）→ `SourceType.VIDEO` → `VideoModule`；在线视频 URL（http/ftp）→ `SourceType.VIDEO_ONLINE` → 阶段五占位模块。
+  - 无音轨视频清晰报错（不静默失败），并引导改用画面解读能力（阶段四）。
+- **D13 讲解段关联帧抽取（规划项落地）**：
+  - 规则信号：转录含「如图 / 如图所示 / 这张图 / 这个流程图 …」等指代词（中英）即判为讲解画面段。
+  - 取该段中点时间戳 → PyAV seek 解码 → 转 rgb24 → **标准库 `zlib` 手写 PNG 写出**（规避本机 ffmpeg 图像编码器受限，零新依赖）。
+  - 帧图落本地 `<out>/<stem>_frames/`，默认不自动上云；`referenced_frame` 含 `frames` 列表（timestamp / frame_path / segment_text / is_visual_explanation），`vision_caption`/`ocr_on_frame` 预留待阶段四视觉栈填充。
+  - `--no-frames` 可关闭帧抽取，仅产出文案。
+- **转录核心重构（D15 复用）**：阶段一的转录逻辑抽为 `transcribe_core(samples, sr, …)`，音频/视频共用，保证输出/缓存行为一致；阶段一既有逻辑与缓存键不变。
+- **类型与路由扩展**：`SourceType` 新增 `VIDEO`；`utils/io.py` 视频扩展名改路由到 `VIDEO`、`is_url()` 识别在线视频；`provider_registry` 注册 `VIDEO`（复用音频 Whisper provider 供 `--check`）。
+- **文档对齐**：`SKILL.md` / `assets/capabilities.json` 标记 `video_transcript` `ready=true`；`references/reference.md` 更新目录/契约/D13/阶段衔接。
+
+### 决策落实
+- D13（视频讲解段关联帧）落地规则信号部分；语义重合度判定（需视觉栈）留待阶段四。
+- 阶段二沿用阶段一隐私红线：本地优先、默认不上云、哈希缓存仅落本地私有目录、敏感内容走 DESEN 闸门（如已装）。
+
+### 待办（后续阶段）
+- 阶段三：OCR（rapidocr+onnxruntime）、PDF 类型探测分流、图像预处理+置信度门控上云。
+- 阶段四：本地 VLM 画面解读（档位自适应 D7），与视频帧共用视觉栈；为 D13 填充 `vision_caption`/`ocr_on_frame`。
+- 阶段五：在线/加密视频受限场景（yt-dlp / 浏览器捕获，副本默认不保存）。
+
 ## [0.1.0] — 2026-08-28 · 三仓库初始化 + 阶段一落地
 
 ### 新增

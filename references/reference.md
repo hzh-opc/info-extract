@@ -26,7 +26,9 @@ scripts/
       language.py          # 语言/任务轻提示(D12·K)
       output.py            # 双通道输出(D11) + SRT/TXT/JSON/MD
       providers/           # ITranscriptProvider + faster-whisper + whisper.cpp
-    ocr/ vision/ doc_extract/ video_online/   # 占位桩（规划中）
+    ocr/ vision/ doc_extract/                 # 占位桩（规划中）
+    video/                                    # 阶段二（已实现）：VideoModule + frames.py（D13 帧抽取）
+    video_online/                             # 占位桩（阶段五：在线/加密视频）
   utils/
     io.py                  # 发现 + 类型识别
     hash_cache.py          # 哈希缓存(D12·L)
@@ -41,7 +43,7 @@ scripts/
 - `confidence`：平均置信度（音频=词级概率均值）
 - `fields`：关键字段（检测语言 / 时长 / 模型 / 段数）
 - `media_ref`：来源路径 / 时间戳 / 产出文件路径 / 状态
-- `referenced_frame`：视频专属（D13，规划中）
+- `referenced_frame`：视频专属（D13，阶段二已实现）：结构为 `{frames:[{timestamp, frame_path, vision_caption, ocr_on_frame, is_visual_explanation, segment_text, extracted}], note}`；`vision_caption`/`ocr_on_frame` 待阶段四视觉栈填充（当前为 null）。
 - `provider_meta`：用了哪个 provider、是否上云（D15/§4.7 透明回显）
 
 落盘双通道：`*.txt`（纯文本）、`*.srt`（字幕）、`*.json` + `*.md`（结构化，含 source/confidence/fields/media_ref/provider_meta）。批量时额外生成 `info-extract-transcript-report.{md,json}` 聚合报告（D12·H）。
@@ -56,12 +58,15 @@ scripts/
 ## 5. 关键实现决策
 
 - **音频解码走 PyAV**：本机实测无系统 ffmpeg，PyAV 自带 ffmpeg 库，零系统依赖、离线、数据不出本机。
+- **视频抽音轨复用同一 PyAV 链路**：`load_audio` 对视频容器同样有效（解码其音轨），故阶段二视频文案直接复用阶段一转录管线（`transcribe_core`），无需重写。
+- **视频帧写出零新依赖**：本机 ffmpeg 构建的 mjpeg/png 图像编码器受限，故 D13 帧抽取用 PyAV 解码 + 标准库 `zlib` 手写 PNG 写出（`modules/video/frames.py`），不引入 Pillow 等额外依赖。
 - **长音频分块不落盘**：faster-whisper 直接接受 float32 16k ndarray，故 VAD 分块在内存切片后直传，无需写临时 WAV（更省、更隐私）。
 - **能力声明 vs 就绪**：SKILL.md 暴露 ocr/speech_transcription/video_transcript 关键词（D9 机器可发现）；但 `assets/capabilities.json` 用 `ready` 标志标注当前仅 `speech_transcription` 就绪，OCR/视频为规划中——命中规划中能力时模块给出清晰提示，不静默失败。
 - **隐私闭环**：哈希缓存仅落本地私有 `.cache`；临时文件走 `TempSandbox`（默认 `.tmp`，处理后清理）；在线/加密视频场景 `keep=False` 强制不落盘（审阅 G）。
 
 ## 6. 后续阶段衔接
 
-- 阶段二/五：视频 `ffmpeg` 抽音轨 → 复用 `audio` 模块；在线/加密走 `browser` 协同。
+- 阶段二（已实现）：视频 `PyAV` 抽音轨 → 复用 `audio` 模块 `transcribe_core`；D13 讲解段关联帧（规则信号命中即抽帧，标准库 PNG）。
+- 阶段五：在线/加密视频走 `browser` 协同（URL 已被 router 路由到 `video_online` 占位模块）。
 - 阶段三：OCR 接入 `rapidocr+onnxruntime`，`utils` 与 DESEN 共享栈；PDF 类型探测分流（审阅 E）。
-- 阶段四：本地 VLM（档位自适应 D7），与视频帧共用视觉栈；图结构重建（D14）。
+- 阶段四：本地 VLM（档位自适应 D7），与视频帧共用视觉栈；图结构重建（D14）；并为 D13 的 `vision_caption`/`ocr_on_frame` 填充视觉描述。

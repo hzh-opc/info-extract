@@ -63,6 +63,22 @@ def _to_md(result: ExtractResult) -> str:
     lines.append("")
     lines.append("## 带时间戳转录（请核对标★的关键信息）\n")
     lines.append(segments_to_txt(result.segments, with_ts=True))
+    # D13：讲解画面关联帧（视频专属）
+    rf = result.referenced_frame
+    if rf and rf.get("frames"):
+        lines.append("")
+        lines.append("## 讲解画面关联帧（D13，供查阅 / 审核）\n")
+        for i, f in enumerate(rf["frames"], 1):
+            lines.append(f"### 帧 {i} · @ {f.get('timestamp')}s（段落 {f.get('segment_start')}–{f.get('segment_end')}s）")
+            lines.append(f"- 是否讲解画面：`{f.get('is_visual_explanation')}`")
+            if f.get("frame_path"):
+                lines.append(f"- 帧图：`{f.get('frame_path')}`")
+            else:
+                lines.append(f"- 帧图：⚠️ 抽取失败（{f.get('segment_text','')[:20]}…）")
+            if f.get("segment_text"):
+                lines.append(f"- 对应文案：{f.get('segment_text')}")
+            lines.append(f"- 视觉描述 / 帧上 OCR：待阶段四视觉栈填充")
+            lines.append("")
     return "\n".join(lines) + "\n"
 
 

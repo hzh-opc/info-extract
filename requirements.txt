@@ -9,6 +9,8 @@ av>=11.0
 # 默认本地转录引擎：faster-whisper（CTranslate2，跨平台、完全离线、数据不出本机）
 faster-whisper>=1.0
 
+# 阶段二（视频文案）复用上述依赖：PyAV 既抽音轨也解码视频帧；
+# 帧写出用标准库 zlib 手写 PNG（规避本机 ffmpeg 图像编码器受限），零新依赖。
 # 阶段三+ 将补充（按需，不在此阶段安装）：
 # rapidocr>=3.9            # 本地 OCR（模型随 wheel 捆绑，完全离线）
 # onnxruntime>=1.19        # rapidocr 推理后端

@@ -104,7 +104,7 @@ def test_io_classify():
     check("wav→transcript", classify("x.wav") == SourceType.TRANSCRIPT)
     check("png→ocr", classify("x.png") == SourceType.OCR)
     check("pdf→doc_extract", classify("x.pdf") == SourceType.DOC_EXTRACT)
-    check("mp4→video_online", classify("x.mp4") == SourceType.VIDEO_ONLINE)
+    check("mp4→video（本地，阶段二）", classify("x.mp4") == SourceType.VIDEO)
     check("xyz→空(不支持)", classify("x.xyz") == "")
 
 
