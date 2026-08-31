@@ -28,7 +28,8 @@ from modules.audio.language import parse_language_hint, parse_task_hint
 from modules.audio.output import write_outputs
 from modules.audio.providers import FasterWhisperProvider
 from modules.audio.vad import TARGET_SR, load_audio, vad_split
-from modules.base import ExtractResult, IModule, InfoExtractError, Segment, SourceType
+from modules.base import ExtractResult, IModule, InfoExtractError, Segment, SourceType, contract_to_result
+from modules.corrector import maybe_correct
 from utils.hash_cache import ResultCache
 from utils.io import format_seconds
 
@@ -197,13 +198,17 @@ class AudioModule(IModule):
             "lang": language, "task": task, "model": model_size,
             "provider": options.get("provider"), "vad_threshold": vad_threshold,
             "min_silence_ms": vad_threshold,
+            # D16 纠正版稿件选项（影响 text/corrected，须纳入缓存键，避免换语境命中旧稿）
+            "context": options.get("context"),
+            "correct_model": options.get("correct_model"),
+            "no_correct": options.get("no_correct", False),
         }
 
         # 哈希缓存（D12·L）
         if cache is not None:
             hit = cache.get(path, cache_key_opts)
             if hit:
-                r = ExtractResult(**_contract_to_result_kwargs(hit))
+                r = contract_to_result(hit)
                 r.media_ref = r.media_ref or {}
                 r.media_ref.update({"path": path, "status": "cached", "outputs": {}})
                 # 缓存命中仍落盘输出（确保 out_dir 有文件）
@@ -219,7 +224,10 @@ class AudioModule(IModule):
             model_size, vad_threshold, long_threshold,
             source_type=SourceType.TRANSCRIPT,
         )
-        # 双通道输出（D11）
+        # D16 交付物范式：固定原始识别为单一备查副本，再尝试生成纠正版稿件
+        result.raw_text = result.text
+        maybe_correct(result, options)
+        # 双通道输出（D11）：.txt=纠正版稿件，.srt=原始带时间戳备查，.json/.md 含 raw_text+corrected
         outputs = write_outputs(result, out_dir, Path(path).stem)
         result.media_ref["outputs"] = outputs
 
@@ -309,24 +317,6 @@ class AudioModule(IModule):
                 "json": str(json_path),
             }
         return {"md": str(md_path), "json": str(json_path)}
-
-
-def _contract_to_result_kwargs(contract: dict) -> dict:
-    """把缓存的 contract 还原为 ExtractResult 构造参数（含 segments 重建）。"""
-    segs = [
-        Segment(start=s["start"], end=s["end"], text=s["text"], words=s.get("words", []))
-        for s in contract.get("segments", [])
-    ]
-    return {
-        "source": contract["source"],
-        "text": contract["text"],
-        "confidence": contract.get("confidence"),
-        "fields": contract.get("fields", {}),
-        "media_ref": contract.get("media_ref", {}),
-        "referenced_frame": contract.get("referenced_frame"),
-        "provider_meta": contract.get("provider_meta", {}),
-        "segments": segs,
-    }
 
 
 __all__ = ["AudioModule"]
