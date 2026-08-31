@@ -18,11 +18,11 @@ import os
 import re
 from typing import Dict, Optional
 
-# 协同能力清单（关键词与 summarize capabilities.json 对齐，子集）
+# 协同能力清单（按技能目录名匹配，关键词精炼，避免全文扫描误判）
 COOP_CAPS = {
-    "desensitization": ["脱敏", "desensitiz", "敏感信息", "sensitive", "去标识"],
-    "document_text": ["文档", "document", "office", "pdf", "word", "ppt", "wps"],
-    "browser": ["browser", "浏览器", "网页", "web", "捕获"],
+    "desensitization": ["desensitiz", "脱敏"],
+    "document_text": ["document", "文档"],
+    "browser": ["browser", "浏览器"],
 }
 
 SKILL_ROOTS = [
@@ -33,19 +33,13 @@ SKILL_ROOTS = [
 ]
 
 
-def _load_skill_text(skill_dir: str) -> str:
-    md = os.path.join(skill_dir, "SKILL.md")
-    if os.path.isfile(md):
-        try:
-            with open(md, "r", encoding="utf-8", errors="ignore") as f:
-                return f.read()
-        except Exception:
-            return ""
-    return ""
-
-
 def _match_capability(keywords) -> Optional[str]:
-    """扫描各技能根目录，返回首个匹配该能力关键词的技能名（无则 None）。"""
+    """按技能目录名（技能名）匹配能力关键词，返回首个匹配技能名（无则 None）。
+
+    只匹配目录名、不扫描 SKILL.md 全文——避免全文关键词过宽导致的误判
+    （如 a-stock-data 的 SKILL.md 含「文档/网页」被误判为 document_text/browser，
+    browser-skill 含「敏感」被误判为 desensitization）。
+    """
     for root in SKILL_ROOTS:
         if not os.path.isdir(root):
             continue
@@ -53,11 +47,9 @@ def _match_capability(keywords) -> Optional[str]:
             skill_dir = os.path.join(root, name)
             if not os.path.isdir(skill_dir):
                 continue
-            text = _load_skill_text(skill_dir).lower()
-            if not text:
-                continue
+            nl = name.lower()
             for kw in keywords:
-                if kw.lower() in text:
+                if kw.lower() in nl:
                     return name
     return None
 
