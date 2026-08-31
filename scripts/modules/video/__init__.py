@@ -20,9 +20,10 @@ from typing import Any, Dict, List
 
 from modules.audio.language import parse_language_hint, parse_task_hint
 from modules.audio.output import write_outputs
-from modules.audio.transcribe import transcribe_core, _contract_to_result_kwargs
+from modules.audio.transcribe import transcribe_core
 from modules.audio.vad import TARGET_SR, load_audio
-from modules.base import ExtractResult, IModule, InfoExtractError, Segment, SourceType
+from modules.base import ExtractResult, IModule, InfoExtractError, Segment, SourceType, contract_to_result
+from modules.corrector import maybe_correct
 from modules.video.frames import extract_referenced_frames
 from utils.hash_cache import ResultCache
 from utils.io import format_seconds
@@ -79,13 +80,19 @@ class VideoModule(IModule):
             "lang": language, "task": task, "model": model_size,
             "provider": options.get("provider"), "vad_threshold": vad_threshold,
             "container": "video",  # 区分视频缓存键
+            "vision_frames": options.get("vision", False),  # 整视频关键帧视觉分析影响结果
+            "extract_frames": extract_frames,  # D13 讲解段抽帧开关影响 referenced_frame
+            # D16 纠正版稿件选项（影响 text/corrected，须纳入缓存键）
+            "context": options.get("context"),
+            "correct_model": options.get("correct_model"),
+            "no_correct": options.get("no_correct", False),
         }
 
         # 哈希缓存（D12·L）
         if cache is not None:
             hit = cache.get(path, cache_key_opts)
             if hit:
-                r = ExtractResult(**_contract_to_result_kwargs(hit))
+                r = contract_to_result(hit)
                 r.media_ref = r.media_ref or {}
                 r.media_ref.update({"path": path, "status": "cached", "outputs": {}})
                 r.media_ref["outputs"] = write_outputs(r, out_dir, Path(path).stem)
@@ -116,9 +123,33 @@ class VideoModule(IModule):
         if extract_frames:
             rf = extract_referenced_frames(path, result.segments, out_dir, Path(path).stem, enabled=True)
             if rf is not None:
+                # 阶段四：用视觉栈填充讲解段帧的视觉描述 / 帧上 OCR（VLM 不可用则留 None，不静默失败）
+                try:
+                    from modules.vision.vision_caption import fill_d13_frames
+
+                    rf = fill_d13_frames(rf, path, out_dir, Path(path).stem, options)
+                except Exception:
+                    pass
                 result.referenced_frame = rf
                 result.fields["visual_frames"] = len(rf["frames"])
+                n_cap = sum(1 for f in rf["frames"] if f.get("vision_caption"))
+                if n_cap:
+                    result.fields["visual_frames_captioned"] = n_cap
 
+        # 审阅 F：整视频关键帧采样 + 视觉描述（--vision 开启；VLM 不可用则仅留帧图与 OCR 文字）
+        if options.get("vision"):
+            try:
+                from modules.vision.vision_caption import analyze_video_frames
+
+                kfa = analyze_video_frames(path, out_dir, Path(path).stem, options)
+                if kfa.get("keyframes"):
+                    result.fields["keyframe_analysis"] = kfa
+            except Exception:
+                pass
+
+        # D16 交付物范式：固定原始识别为单一备查副本，再尝试生成纠正版稿件
+        result.raw_text = result.text
+        maybe_correct(result, options)
         # 双通道输出（D11）
         outputs = write_outputs(result, out_dir, Path(path).stem)
         result.media_ref["outputs"] = outputs
