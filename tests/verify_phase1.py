@@ -35,7 +35,7 @@ from modules.audio.language import parse_language_hint, parse_task_hint  # noqa:
 from modules.audio.output import write_outputs  # noqa: E402
 from modules.audio.providers.base import ITranscriptProvider  # noqa: E402
 from modules.audio.vad import TARGET_SR, load_audio, vad_split  # noqa: E402
-from modules.base import ExtractResult, Segment, SourceType  # noqa: E402
+from modules.base import ExtractResult, Segment, SourceType, contract_to_result  # noqa: E402
 from provider_registry import get_provider  # noqa: E402
 from utils.hash_cache import ResultCache  # noqa: E402
 from utils.io import classify  # noqa: E402
@@ -103,7 +103,8 @@ def test_io_classify():
     check("mp3→transcript", classify("x.mp3") == SourceType.TRANSCRIPT)
     check("wav→transcript", classify("x.wav") == SourceType.TRANSCRIPT)
     check("png→ocr", classify("x.png") == SourceType.OCR)
-    check("pdf→doc_extract", classify("x.pdf") == SourceType.DOC_EXTRACT)
+    # 阶段三：图片型/扫描件 PDF 从复合文档抽出、单独归 OCR（D10 分工，原生文本层页交 document_text）
+    check("pdf→ocr（阶段三：图片型/扫描件 PDF 归 OCR）", classify("x.pdf") == SourceType.OCR)
     check("mp4→video（本地，阶段二）", classify("x.mp4") == SourceType.VIDEO)
     check("xyz→空(不支持)", classify("x.xyz") == "")
 
@@ -129,6 +130,13 @@ def test_hash_cache():
         check("缓存写入/读取命中", got is not None and got["text"] == "hi")
         miss = cache.get(str(tmp), {**key_opts, "model": "medium"})
         check("选项变更→缓存未命中", miss is None)
+        # 修复 P0-1：阶段三/四/五/D16 新增选项须参与缓存键（白名单漏配曾导致错误命中）
+        miss_ocr = cache.get(str(tmp), {**key_opts, "force_ocr": True})
+        check("force_ocr 变更→缓存未命中", miss_ocr is None)
+        miss_pre = cache.get(str(tmp), {**key_opts, "preprocess": False})
+        check("preprocess 变更→缓存未命中", miss_pre is None)
+        miss_ctx = cache.get(str(tmp), {**key_opts, "context": "化学实验报告"})
+        check("D16 context 变更→缓存未命中", miss_ctx is None)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -148,9 +156,15 @@ def test_output_contract():
     j = json.loads((out / "x.json").read_text(encoding="utf-8"))
     check("JSON 含 source/confidence", j["source"] == "transcript" and j["confidence"] == 0.91)
     txt = (out / "x.txt").read_text(encoding="utf-8")
-    check("TXT 含时间戳", "[" in txt and "你好" in txt)
+    check("TXT 为纠正版稿件文本（含正文）", "你好" in txt and "世界" in txt)
+    check("JSON 含 D16 raw_text/corrected 字段", "raw_text" in j and "corrected" in j)
     srt = (out / "x.srt").read_text(encoding="utf-8")
     check("SRT 含时间轴", "-->" in srt)
+    # 修复 P0-2：segments 须入契约，缓存命中后才能还原带时间戳片段（否则 .srt 变空）
+    check("JSON 含 segments（带时间戳片段）", "segments" in j and len(j["segments"]) == 2)
+    rr = contract_to_result(j)
+    check("缓存还原 segments 数量一致", len(rr.segments) == 2)
+    check("缓存还原 segments 时间戳一致", rr.segments[0].start == 0.0 and rr.segments[1].end == 4.0)
     # 清理
     for f in out.glob("*"):
         f.unlink()
@@ -234,6 +248,21 @@ def test_router_audio_routing(fixture: Path):
         check("router 产出 provider=fake",
               data.get("provider_meta", {}).get("provider") == "fake",
               str(data.get("provider_meta")))
+    # 修复 P1：--json 输出须为纯 JSON（横幅不污染 stdout，下游 json.loads 可直接解析）
+    import contextlib
+    import io
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            router.main([str(fixture), "--out", str(out_dir), "--no-cache", "--json"])
+    except SystemExit:
+        pass
+    raw = buf.getvalue().strip()
+    try:
+        payload = json.loads(raw)
+        check("--json 输出为纯 JSON（无横幅污染）", payload.get("total") == 1)
+    except Exception:
+        check("--json 输出为纯 JSON（无横幅污染）", False, raw[:200])
     shutil.rmtree(str(out_dir), ignore_errors=True)
 
 
