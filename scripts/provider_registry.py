@@ -22,16 +22,23 @@ _REGISTRY: Optional[Dict] = None
 
 def _build_registry() -> Dict:
     from modules.audio.providers import PROVIDERS as AUDIO_PROVIDERS
+    from modules.ocr.providers import PROVIDERS as OCR_PROVIDERS
+    from modules.vision.providers import PROVIDERS as VISION_PROVIDERS
+    from modules.video_online.providers import PROVIDERS as VIDEO_ONLINE_PROVIDERS
+    from modules.video_online.providers import ENUM_PROVIDERS as VIDEO_ONLINE_ENUM_PROVIDERS
 
     return {
         SourceType.TRANSCRIPT: AUDIO_PROVIDERS,
         # 阶段二视频文案复用同一套本地 Whisper provider（抽音轨后转录）
         SourceType.VIDEO: AUDIO_PROVIDERS,
-        # 以下在对应阶段落地后接入：
-        # SourceType.OCR: [RapidOcrProvider, ...]
-        # SourceType.VISION: [LocalVLMProvider, ...]
-        # SourceType.DOC_EXTRACT: [...]
-        # SourceType.VIDEO_ONLINE: [...]
+        # 阶段三 OCR（rapidocr + onnxruntime，PP-OCRv6，本地内置、离线）
+        SourceType.OCR: OCR_PROVIDERS,
+        # 阶段四 画面解读（本地 VLM，ollama + Qwen2.5-VL，档位自适应 D7，零新依赖）
+        SourceType.VISION: VISION_PROVIDERS,
+        # 阶段五 在线/加密视频（yt-dlp 本地下载 + 浏览器捕获回退，D3 不留存副本）
+        SourceType.VIDEO_ONLINE: VIDEO_ONLINE_PROVIDERS,
+        # 阶段五增强（方案 B）：账号/合集枚举（抖音/小红书/B站 等），枚举出视频 URL 后逐条走下载管线
+        SourceType.VIDEO_ONLINE_ENUM: VIDEO_ONLINE_ENUM_PROVIDERS,
     }
 
 
@@ -43,13 +50,21 @@ def _registry() -> Dict:
 
 
 def register(capability: str, provider_cls, priority: int = 99) -> None:
-    """扩展接入新 Provider（阶段落地时调用）。priority 越小越优先。"""
+    """扩展接入新 Provider（阶段落地时调用）。priority 越小越优先。
+
+    与 `_build_registry` 的静态列表一致：列表顺序即优先级。priority 默认 99 追加末尾；
+    显式 < 99 时按升序插入到对应位置（现有内置 provider 未声明 priority，视为 99）。
+    """
     reg = _registry()
     lst: List = reg.setdefault(capability, [])
-    lst.append(provider_cls)
-    # 简单按类名排序维持稳定；真实优先级由调用方在类上声明
-    if priority < 99:
-        lst.sort(key=lambda c: 0 if c.name == provider_cls.name else 1)
+    # 同名去重（幂等注册）
+    name = getattr(provider_cls, "name", None)
+    if any(getattr(c, "name", None) == name for c in lst):
+        return
+    idx = 0
+    while idx < len(lst) and getattr(lst[idx], "priority", 99) <= priority:
+        idx += 1
+    lst.insert(idx, provider_cls)
 
 
 def get_provider(capability: str, name: Optional[str] = None):
@@ -61,7 +76,8 @@ def get_provider(capability: str, name: Optional[str] = None):
     providers = _registry().get(capability, [])
     if not providers:
         return None
-    if name:
+    # "auto" / 空 / None 均视为「未指定」→ 返回第一个可用的（本地优先）
+    if name and name != "auto":
         for p in providers:
             if p.name == name:
                 return p()
