@@ -16,13 +16,13 @@
 from __future__ import annotations
 
 import re
-import zlib
-import struct
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import av
 import numpy as np
+
+from utils.image import write_png_rgb
 
 # 指代词（中英）：命中即视为「在讲解画面」
 DEICTIC_PATTERNS_ZH = [
@@ -51,21 +51,43 @@ def is_visual_explanation(text: str) -> bool:
 
 
 def _write_png(path: str, rgb: np.ndarray) -> None:
-    """标准库-only PNG 写出（不依赖 ffmpeg 图像编码器 / Pillow）。rgb: H×W×3 uint8。"""
-    h, w, _ = rgb.shape
-    raw = bytearray()
-    for y in range(h):
-        raw.append(0)  # filter type 0 (None)
-        raw.extend(rgb[y].tobytes())
-    comp = zlib.compress(bytes(raw), 9)
+    """标准库-only PNG 写出（不依赖 ffmpeg 图像编码器 / Pillow）。rgb: H×W×3 uint8。
 
-    def chunk(typ: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + typ + data + struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF)
+    复用 utils.image.write_png_rgb（集中实现，避免重复）。
+    """
+    write_png_rgb(path, rgb)
 
-    sig = b"\x89PNG\r\n\x1a\n"
-    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)  # 8-bit, color type 2 (RGB)
-    with open(path, "wb") as f:
-        f.write(sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", comp) + chunk(b"IEND", b""))
+
+def extract_frame_rgb(video_path: str, timestamp: float) -> Optional[np.ndarray]:
+    """在 timestamp（秒）处抽取一帧并返回 RGB ndarray（H×W×3 uint8）；失败返回 None。
+
+    供视觉栈（阶段四）对 D13 讲解段帧 / 关键帧做 VLM 解读时复用，避免重复解码逻辑。
+    """
+    try:
+        container = av.open(video_path)
+        if not container.streams.video:
+            return None
+        v = container.streams.video[0]
+        frame = None
+        try:
+            container.seek(int(timestamp / float(v.time_base)), stream=v)
+            frame = next(container.decode(v), None)
+        except Exception:
+            frame = None
+        if frame is None:
+            # 兜底：从头顺序解码到首个 >= timestamp 的帧
+            container = av.open(video_path)
+            v = container.streams.video[0]
+            for fr in container.decode(v):
+                ft = float(fr.pts * v.time_base) if fr.pts is not None else None
+                if ft is not None and ft >= timestamp:
+                    frame = fr
+                    break
+        if frame is None:
+            return None
+        return frame.reformat(frame.width, frame.height, "rgb24").to_ndarray()
+    except Exception:
+        return None
 
 
 def extract_frame(video_path: str, timestamp: float, out_path: str) -> bool:
