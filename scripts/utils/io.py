@@ -22,16 +22,23 @@ from modules.base import SourceType
 # ---- 扩展名分类表 ----
 AUDIO_EXT = {
     ".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus",
-    ".wma", ".aiff", ".aif", ".caf", ".webm",  # 注意：.mp4/.mov 等归视频
+    ".wma", ".aiff", ".aif", ".caf",
 }
+# 注：.webm 归 VIDEO_EXT（多为 VP8/VP9 视频容器）；纯音频 webm 极少见，若被当视频处理
+# 会因「无音轨」清晰报错（不静默失败），比双归类（先后覆盖）的隐式行为更可预期。
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".wmv", ".m4v", ".ts"}
 IMAGE_EXT = {
     ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff", ".tif", ".webp", ".heic", ".heif",
 }
 # 复合文档（②）：需先抽取内嵌媒体再路由（阶段三/四落地）
+# 注：.pdf 已从复合文档抽出，单独归 OCR（阶段三）——OCR 模块内做类型探测分流
+# （纯图/扫描件页 → OCR；含原生文本层页 → D10 分工交 document_text 技能）。
 DOC_EXT = {
-    ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".epub", ".odt", ".rtf",
+    ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".epub", ".odt", ".rtf",
 }
+
+# 图片型 / 扫描件 PDF：路由到 OCR（阶段三）；OCR 模块内做类型探测分流（审阅 E）。
+PDF_EXT = {".pdf"}
 
 # 已知可处理扩展名 → 来源类型
 _EXT_TO_TYPE: Dict[str, str] = {}
@@ -41,8 +48,10 @@ for _e in VIDEO_EXT:
     _EXT_TO_TYPE[_e] = SourceType.VIDEO  # 本地视频文件 → 阶段二视频文案（复用音频转录）
 for _e in IMAGE_EXT:
     _EXT_TO_TYPE[_e] = SourceType.OCR  # 图片先路由 OCR（阶段三）；画面解读由 OCR 模块协同
+for _e in PDF_EXT:
+    _EXT_TO_TYPE[_e] = SourceType.OCR  # 扫描件/图片型 PDF → OCR（阶段三，模块内探测分流）
 for _e in DOC_EXT:
-    _EXT_TO_TYPE[_e] = SourceType.DOC_EXTRACT  # 复合文档抽取（阶段三落地）
+    _EXT_TO_TYPE[_e] = SourceType.DOC_EXTRACT  # 其余复合文档抽取（阶段四/五落地）
 
 
 def classify(path: str) -> str:
@@ -108,6 +117,6 @@ def format_seconds(sec: float) -> str:
 
 
 __all__ = [
-    "AUDIO_EXT", "VIDEO_EXT", "IMAGE_EXT", "DOC_EXT",
+    "AUDIO_EXT", "VIDEO_EXT", "IMAGE_EXT", "DOC_EXT", "PDF_EXT",
     "classify", "is_supported", "discover", "is_url", "format_seconds",
 ]
