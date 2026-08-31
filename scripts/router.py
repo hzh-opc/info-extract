@@ -15,7 +15,14 @@
   python router.py --check                         # 查看能力/provider 可用性
   python router.py 课程.mp4                         # 抽音轨→转录（阶段二，复用 Whisper）
   python router.py 课程.mp4 --no-frames            # 仅文案，不抽讲解画面帧
-  python router.py 图片.png                        # 当前阶段提示 OCR 规划中
+  python router.py "https://www.example.com/watch?v=abc"   # 在线视频（阶段五）：yt-dlp 下载(tmp,处理后即删,不留存)
+  python router.py "https://encrypted.example.com/v" --capture-path ./录制.mp4  # 加密/DRM：本地录制文件走浏览器捕获回退
+  python router.py 图片.png                         # 本地 OCR（阶段三，rapidocr，离线）
+  python router.py 扫描件.pdf                       # 图片型 PDF → 探测分流 + 本地 OCR
+  python router.py 扫描件.pdf --force-ocr          # 强制全部页 OCR（含文本层页）
+  python router.py 图片.png --confidence-threshold 0.9   # 调高置信度门控阈值
+  python router.py 图片.png --context "这是一份化学实验报告"   # D16 纠正版稿件：提供语境消歧
+  python router.py 录音.mp3 --no-correct                # D16 跳过纠正，直接以原始识别为交付物
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from modules.base import SourceType  # noqa: E402
+from quality_scorer import score  # noqa: E402
 from utils.io import classify, discover, is_url  # noqa: E402
 
 MODULE_MAP = {
@@ -115,6 +123,29 @@ def build_options(args) -> Dict:
         "long_threshold": args.long_threshold,
         "vad_threshold": args.vad_threshold,
         "extract_frames": not args.no_frames,
+        # 阶段三 OCR 选项（D2 置信度门控 / 审阅 D 预处理链 / D15 provider）
+        "confidence_threshold": args.confidence_threshold,
+        "force_ocr": args.force_ocr,
+        "preprocess": not args.no_preprocess,
+        # 阶段四 画面解读选项（D7 档位自适应 / OCR 协同 / 整视频关键帧视觉分析）
+        "vision_tier": args.vision_tier,
+        "ocr_coop": not args.no_ocr_vision,
+        "vision": args.vision,
+        # D16 交付物范式：纠正版稿件（本地离线 / 语境消歧；联网检索仅 agent 层触发）
+        # 用 getattr 兜底，保证 build_options 对未含新选项的调用方（如单测手搓 args）健壮
+        "no_correct": getattr(args, "no_correct", False),
+        "context": getattr(args, "context", None),
+        "correct_model": getattr(args, "correct_model", None),
+        # 阶段五 在线/加密视频：用户提供本地录制文件走浏览器捕获回退（--capture-path）
+        "capture_path": getattr(args, "capture_path", None),
+        # 阶段五增强（方案 B）：账号/合集枚举 + cookie 适配（抖音/小红书/B站 等）
+        "cookies": getattr(args, "cookies", None),
+        "cookies_from_browser": getattr(args, "cookies_from_browser", None),
+        "enumerate": getattr(args, "playlist", False),
+        # 方案 B 后续强化：账号批量防风控限速（顺序处理 + 随机间隔 + 数量上限）
+        "enum_interval": getattr(args, "enum_interval", 3.0),
+        "no_throttle": getattr(args, "no_throttle", False),
+        "enum_limit": getattr(args, "enum_limit", None),
     }
 
 
@@ -125,7 +156,8 @@ def run_check() -> int:
     print("=== info-extract · 能力自检 ===")
     print("\n[本地 Provider 可用性]")
     for cap in [SourceType.TRANSCRIPT, SourceType.OCR, SourceType.VISION,
-                SourceType.DOC_EXTRACT, SourceType.VIDEO, SourceType.VIDEO_ONLINE]:
+                SourceType.DOC_EXTRACT, SourceType.VIDEO, SourceType.VIDEO_ONLINE,
+                SourceType.VIDEO_ONLINE_ENUM]:
         provs = available_providers(cap)
         if not provs:
             print(f"  - {cap}: (尚未接入)")
@@ -145,7 +177,8 @@ def main(argv: List[str] | None = None) -> int:
     ensure_runtime()  # 门禁：缺依赖自动复用 venv 或友好退出（见 ensure_runtime）
     parser = argparse.ArgumentParser(
         prog="info-extract",
-        description="信息抽取技能主入口：音频转录（阶段一）与视频文案（阶段二）已实现；OCR/视觉/文档规划中。",
+        description="信息抽取技能主入口：音频转录、视频文案、OCR、画面解读、在线/加密视频均已实现；"
+                    "复合文档抽取（doc_extract）规划中。",
     )
     parser.add_argument("inputs", nargs="*", help="待处理文件/目录/glob")
     parser.add_argument("--type", choices=["auto", *MODULE_MAP.keys()], default="auto",
@@ -154,9 +187,9 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--task", choices=["transcribe", "translate"], help="transcribe 原语转录 / translate 翻译")
     parser.add_argument("--model", default="small",
                         choices=["tiny", "base", "small", "medium", "large-v3", "turbo"],
-                        help="Whisper 模型规模（默认 small）")
+                        help="Whisper 模型规模（默认 small；仅音频/视频文案生效）")
     parser.add_argument("--provider", default="auto",
-                        help="转录 provider：auto / faster-whisper / whisper.cpp（D15）")
+                        help="provider：auto / faster-whisper（转录）/ rapidocr（OCR）（D15）")
     parser.add_argument("--out", default=os.getcwd(), help="输出目录（默认当前目录）")
     parser.add_argument("-r", "--recursive", action="store_true", help="递归目录")
     parser.add_argument("--no-cache", action="store_true", help="禁用哈希缓存（D12·L）")
@@ -166,6 +199,48 @@ def main(argv: List[str] | None = None) -> int:
                         help="超过该秒数启用 VAD 分块（默认 600，D12·J）")
     parser.add_argument("--vad-threshold", type=int, default=700,
                         help="VAD 最小静音毫秒（默认 700，D12·J）")
+    # 阶段三 OCR 选项
+    parser.add_argument("--confidence-threshold", type=float, default=0.85,
+                        help="OCR 置信度门控阈值（默认 0.85，低于则标记本地质量受限、建议上云提质，D2/审阅 D）")
+    parser.add_argument("--force-ocr", action="store_true",
+                        help="PDF 强制全部页 OCR（默认含原生文本层页交 document_text，D10 分工）")
+    parser.add_argument("--no-preprocess", action="store_true",
+                        help="禁用 OCR 前图像预处理链（归一化/去噪/deskew，审阅 D）")
+    # 阶段四 画面解读选项
+    parser.add_argument("--vision", action="store_true",
+                        help="视频：额外做场景切换关键帧采样 + 视觉描述（审阅 F，需本地 VLM）")
+    parser.add_argument("--vision-tier", default=None,
+                        help="手动指定 VLM 档位（D7 覆盖自动判定）：0=轻量(3B)/1=标准(7B)/2=高性能/3=旗舰(32B)，"
+                             "或 ollama 模型标签；默认按硬件自适应")
+    parser.add_argument("--no-ocr-vision", action="store_true",
+                        help="画面解读时关闭 OCR 协同（§1.1 B.3，默认开启：先取图中文字再结合画面理解）")
+    # D16 交付物范式：纠正版稿件（默认本地离线纠正，不联网）
+    parser.add_argument("--no-correct", action="store_true",
+                        help="跳过纠正版稿件生成（D16）：直接以原始识别作为交付物，raw_text 仍保留备查")
+    parser.add_argument("--context", default=None,
+                        help="纠正版稿件的语境/上下文（D16）：提供给本地模型用于消歧，如领域/术语/专有名词")
+    parser.add_argument("--correct-model", default=None,
+                        help="纠正用本地文本模型（ollama 标签，默认 qwen2.5:7b；需本机已拉取，零新依赖）")
+    # 阶段五 在线/加密视频选项
+    parser.add_argument("--capture-path", default=None,
+                        help="在线/加密视频：指定本地录制文件路径（播放中捕获产物），走 BrowserCapture 回退（§4 边界 #2）")
+    # 阶段五增强（方案 B）：账号/合集枚举 + cookie 适配
+    parser.add_argument("--cookies", default=None,
+                        help="在线/加密视频：Netscape cookies.txt 路径，用于需登录态的账号视频（抖音/小红书/B站）")
+    parser.add_argument("--cookies-from-browser", default=None,
+                        help="在线/加密视频：从本机浏览器注入登录态（chrome/firefox/edge/safari/brave），"
+                             "用于需登录的账号视频；仅处理你有权访问的内容（§4 边界 #2/#3）")
+    parser.add_argument("--playlist", "--account", action="store_true",
+                        help="强制将输入 URL 视为账号/合集/频道页，先枚举其下全部视频再逐条转写"
+                             "（抖音/小红书/B站 账号页默认自动识别枚举，此开关可覆盖其它平台）")
+    # 方案 B 后续强化：账号批量防风控限速
+    parser.add_argument("--enum-interval", type=float, default=3.0,
+                        help="账号/合集批量处理：相邻两条视频之间的间隔秒数（默认 3.0，带 0.5x~1.5x 随机抖动；"
+                             "防风控限流，降低封号/限流风险）")
+    parser.add_argument("--enum-limit", type=int, default=None,
+                        help="账号/合集批量处理：单账号最多处理的视频数（默认全部；超大账号建议分批，防风控/控成本）")
+    parser.add_argument("--no-throttle", action="store_true",
+                        help="关闭账号批量处理的限速间隔（仅当你明确拥有这些内容且接受平台风控风险时）")
     parser.add_argument("--json", action="store_true", help="以 JSON 输出结果（供下游消费）")
     parser.add_argument("--check", action="store_true", help="仅自检能力/provider 可用性")
     parser.add_argument("--quiet", action="store_true", help="仅输出结果，不打印横幅")
@@ -195,7 +270,7 @@ def main(argv: List[str] | None = None) -> int:
             else:
                 unsupported.append(str(p))
 
-    # URL 输入 → 在线/加密视频（阶段五；当前为占位提示，不静默失败）
+    # URL 输入 → 在线/加密视频（阶段五，已实现：yt-dlp 下载 / 浏览器捕获回退 / 账号枚举）
     for u in url_inputs:
         found.append((u, SourceType.VIDEO_ONLINE))
 
@@ -213,14 +288,15 @@ def main(argv: List[str] | None = None) -> int:
     options = build_options(args)
     all_results = []
 
-    if not args.quiet:
+    if not args.quiet and not args.json:
         print("info-extract · 本地优先 · 默认不上云（§4）")
         print(f"命中类型：{', '.join(groups.keys()) or '无'}")
 
     for stype, paths in groups.items():
         module = load_module(stype)
         if not module.ready:
-            phase = module.run(paths, options)[0].media_ref.get("phase", "规划中")
+            planned = module.run(paths, options)
+            phase = planned[0].media_ref.get("phase", "规划中") if planned else "规划中"
             print(f"\n[{stype}] {phase}：当前阶段未实现，输入已识别但暂不处理：")
             for p in paths:
                 print(f"  - {p}")
@@ -237,9 +313,9 @@ def main(argv: List[str] | None = None) -> int:
         payload = {
             "total": len(all_results),
             "ok": len(ok), "cached": len(cached), "error": len(err),
-            "results": [r.to_contract() | {"media_ref": _safe_media(r.media_ref)} for r in all_results],
+            "results": [r.to_contract() for r in all_results],
         }
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
     else:
         if not args.quiet:
             print(f"\n=== 处理汇总 ===\n成功 {len(ok)} ｜ 缓存命中 {len(cached)} ｜ 异常 {len(err)}")
@@ -247,13 +323,59 @@ def main(argv: List[str] | None = None) -> int:
                 mr = r.media_ref
                 if mr.get("status") == "ok":
                     print(f"\n📄 {mr.get('path')}")
-                    print(f"   语言={r.fields.get('detected_language')} 时长={r.fields.get('duration_sec')}s "
-                          f"置信度={r.confidence} 引擎={r.provider_meta.get('provider')}")
+                    if r.source == SourceType.OCR:
+                        # OCR 友好汇总（页数/框数/置信度/质量受限/文本层页提示）
+                        f = r.fields
+                        print(f"   页数={f.get('pages')} 框数={f.get('num_boxes')} "
+                              f"平均置信度={r.confidence} 引擎={r.provider_meta.get('provider')}")
+                        if mr.get("is_pdf"):
+                            tl = f.get("text_layer_pages_skip")
+                            if tl:
+                                print(f"   文本层页(D10)：{tl} 已跳过→建议 document_text 抽取文本层")
+                        if f.get("local_quality_limited"):
+                            print(f"   ⚠️ 本地质量受限：平均置信度 <{f.get('confidence_threshold')}，"
+                                  f"可上云提质（需经脱敏闸门，§4.4）")
+                    elif r.source == SourceType.VISION:
+                        # 画面解读友好汇总（VLM 可用 / 档位 / OCR 协同 / 上云提质提示）
+                        f = r.fields
+                        avail = f.get("vision_available")
+                        print(f"   VLM={'✅本地' if avail else '⚠️未配置'} "
+                              f"引擎={r.provider_meta.get('provider')}"
+                              + (f" tier={f.get('vision_tier')}" if f.get('vision_tier') else "")
+                              + (f" OCR协同={'✅' if f.get('ocr_text') else '—'}"))
+                        if f.get("caption"):
+                            print(f"   解读：{f['caption'][:60]}{'…' if len(f['caption']) > 60 else ''}")
+                        if not avail:
+                            print(f"   ℹ️ 本地未配置 VLM（ollama），仅提供 OCR 文字；如需画面解读可上云提质（D2/§4.4）")
+                    else:
+                        print(f"   语言={r.fields.get('detected_language')} 时长={r.fields.get('duration_sec')}s "
+                              f"置信度={r.confidence} 引擎={r.provider_meta.get('provider')}")
+                        if mr.get("online"):
+                            enc = "（加密/DRM）" if r.fields.get("encrypted") else ""
+                            print(f"   在线/加密视频{enc}：获取方式={r.fields.get('acquire_method')}；"
+                                  f"副本未保存(D3)，仅产出文案/字幕")
+                            if r.fields.get("legal_risk_warning"):
+                                print(f"   ⚠️ {r.fields.get('legal_risk_warning')}")
+                    # D16 纠正版稿件状态（透明回显，D15/§4.7 同构）
+                    cm = r.provider_meta.get("correction") if isinstance(r.provider_meta, dict) else None
+                    if cm:
+                        print(f"   纠正(D16)：{cm['status']}" + (f"（{cm.get('model')}）" if cm.get('model') else ""))
+                    # D15 质量评分：透明回显质量档与建议（quality_scorer 驱动自动升级）
+                    q = score(r)
+                    qual = f"   质量：{q['quality']}"
+                    if q.get("suggestion"):
+                        qual += f"（{q['suggestion']}）"
+                    print(qual)
                     outs = mr.get("outputs", {})
                     print(f"   产出：{', '.join(f'{k}→{v}' for k, v in outs.items())}")
                     if r.referenced_frame and r.referenced_frame.get("frames"):
                         n = len(r.referenced_frame["frames"])
-                        print(f"   讲解画面帧(D13)：{n} 张（见输出目录 <stem>_frames/，默认落本地、不自动上云）")
+                        n_cap = sum(1 for fr in r.referenced_frame["frames"] if fr.get("vision_caption"))
+                        cap_note = f"，其中 {n_cap} 张已填视觉描述" if n_cap else ""
+                        print(f"   讲解画面帧(D13)：{n} 张（见输出目录 <stem>_frames/，默认落本地、不自动上云）{cap_note}")
+                    if r.fields.get("keyframe_analysis"):
+                        kf = r.fields["keyframe_analysis"].get("keyframes", [])
+                        print(f"   关键帧视觉分析(审阅 F)：{len(kf)} 帧（场景切换采样 + 视觉描述）")
                     if mr.get("report"):
                         print(f"   批量报告：{mr['report'].get('md')}")
                 elif mr.get("status") == "cached":
@@ -265,12 +387,6 @@ def main(argv: List[str] | None = None) -> int:
 
     # 异常码
     return 1 if err else 0
-
-
-def _safe_media(media_ref: dict) -> dict:
-    """JSON 输出时去掉非序列化项（outputs 路径保留）。"""
-    out = dict(media_ref)
-    return out
 
 
 if __name__ == "__main__":
