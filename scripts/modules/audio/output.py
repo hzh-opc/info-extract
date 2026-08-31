@@ -46,7 +46,17 @@ def segments_to_txt(segments: List[Segment], with_ts: bool = True) -> str:
 
 def _to_md(result: ExtractResult) -> str:
     lines: List[str] = []
-    lines.append(f"# 音频转录结果\n")
+    title = "在线/加密视频文案提取结果" if result.fields.get("online") else "音频转录结果"
+    lines.append(f"# {title}\n")
+    if result.fields.get("online"):
+        enc = "（加密/DRM）" if result.fields.get("encrypted") else ""
+        lines.append(f"- **获取方式 (acquire_method)**：`{result.fields.get('acquire_method')}`{enc}")
+        lines.append(f"- **副本保存**：未保存（D3：录制副本默认不本地/云端保存，仅处理不留存）")
+        if result.fields.get("title"):
+            lines.append(f"- **标题 (title)**：{result.fields.get('title')}")
+        if result.fields.get("legal_risk_warning"):
+            lines.append(f"- **⚠️ 法律风险提示**：{result.fields.get('legal_risk_warning')}")
+        lines.append("")
     lines.append(f"- **来源 (source)**：`{result.source}`")
     pm = result.provider_meta or {}
     lines.append(f"- **引擎 (provider)**：`{pm.get('provider', '?')}`（上云：{pm.get('cost', 'local')}）")
@@ -60,8 +70,24 @@ def _to_md(result: ExtractResult) -> str:
         lines.append("- **溯源 (media_ref)**：")
         for k, v in result.media_ref.items():
             lines.append(f"  - {k}: {v}")
+    # D16 纠正版稿件（交付物，置顶）
     lines.append("")
-    lines.append("## 带时间戳转录（请核对标★的关键信息）\n")
+    lines.append("## 纠正版稿件（交付物，请以此为准；机器识别可能不准，请核对）\n")
+    corr = result.corrected
+    if corr:
+        lines.append(result.text)
+        lines.append("")
+        lines.append(f"> 纠正来源：{corr.get('correction_source')}｜模型：{corr.get('model')}｜时间：{corr.get('corrected_at')}")
+        notes = corr.get("correction_notes")
+        if notes:
+            lines.append(f"> 纠正说明：{notes}")
+    else:
+        lines.append(result.text)
+        lines.append("")
+        lines.append("> 未经本地纠正（未配置本地文本模型或已 --no-correct），以上即原始识别文本。")
+    # 识别结果备查（原始，带时间戳）
+    lines.append("")
+    lines.append("## 识别结果备查（原始，带时间戳，供核对）\n")
     lines.append(segments_to_txt(result.segments, with_ts=True))
     # D13：讲解画面关联帧（视频专属）
     rf = result.referenced_frame
@@ -77,7 +103,32 @@ def _to_md(result: ExtractResult) -> str:
                 lines.append(f"- 帧图：⚠️ 抽取失败（{f.get('segment_text','')[:20]}…）")
             if f.get("segment_text"):
                 lines.append(f"- 对应文案：{f.get('segment_text')}")
-            lines.append(f"- 视觉描述 / 帧上 OCR：待阶段四视觉栈填充")
+            oc = f.get("ocr_on_frame")
+            vc = f.get("vision_caption")
+            if oc:
+                lines.append(f"- 帧上 OCR 文字：{oc}")
+            if vc:
+                lines.append(f"- 视觉描述：{vc}")
+            if not oc and not vc:
+                lines.append(f"- 视觉描述 / 帧上 OCR：（本地未配置 VLM，未填充；可上云提质 D2/§4.4）")
+            lines.append("")
+    # 审阅 F：整视频关键帧视觉分析（--vision 开启，需本地 VLM）
+    kfa = result.fields.get("keyframe_analysis")
+    if kfa and kfa.get("keyframes"):
+        lines.append("")
+        lines.append("## 关键帧视觉分析（审阅 F，供查阅 / 审核）\n")
+        for i, kf in enumerate(kfa["keyframes"], 1):
+            lines.append(f"### 关键帧 {i} · @ {kf.get('timestamp')}s")
+            if kf.get("frame_path"):
+                lines.append(f"- 帧图：`{kf.get('frame_path')}`")
+            oc = kf.get("ocr_on_frame")
+            vc = kf.get("vision_caption")
+            if oc:
+                lines.append(f"- 帧上 OCR 文字：{oc}")
+            if vc:
+                lines.append(f"- 视觉描述：{vc}")
+            if not oc and not vc:
+                lines.append("- 视觉描述 / 帧上 OCR：（VLM 不可用，未填充）")
             lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -95,7 +146,8 @@ def write_outputs(
 
     if "txt" in formats:
         p = out_dir / f"{stem}.txt"
-        p.write_text(segments_to_txt(result.segments, with_ts=True), encoding="utf-8")
+        # D16：.txt = 纠正版稿件（交付物，clean text）；原始带时间戳备查见 .srt
+        p.write_text(result.text or "", encoding="utf-8")
         written["txt"] = str(p)
     if "srt" in formats:
         p = out_dir / f"{stem}.srt"
