@@ -29,13 +29,34 @@ def sha256_file(path: str, chunk_size: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
+def sha256_text(path: str) -> str:
+    """对路径/URL 字符串本身求哈希（用于在线视频 URL 等「非本地文件」场景，D12·L）。"""
+    return hashlib.sha256(path.encode("utf-8")).hexdigest()
+
+
+def _is_file_path(path: str) -> bool:
+    """判断 path 是否可当作本地文件求哈希（URL 或不存在的路径按字符串处理）。"""
+    if path.startswith(("http://", "https://", "ftp://", "ftps://")):
+        return False
+    return os.path.isfile(path)
+
+
 def _options_hash(options: dict) -> str:
-    """对影响结果的关键选项求稳定哈希（排除 out_dir 等路径类无关项）。"""
+    """对影响结果的关键选项求稳定哈希。
+
+    调用方（各模块）传入的 options 应是「精选后影响结果的关键选项」集合：
+    - audio/video：lang/task/model/provider/vad_threshold/min_silence_ms/container/vision_frames
+    - ocr：ocr/force_ocr/preprocess/conf_threshold
+    - vision：vision/ocr_coop/vision_tier/task
+    - D16 纠正：context/correct_model/no_correct（影响纠正版稿件）
+    此处对全部字段做稳定哈希、仅排除明确与结果无关的项（out_dir/use_cache 等），
+    不做白名单过滤——避免新阶段新增选项漏配导致缓存错误命中、返回过期结果。
+    """
     relevant = {
         k: v for k, v in options.items()
-        if k in ("lang", "task", "model", "provider", "vad_threshold", "min_silence_ms")
+        if k not in ("out_dir", "use_cache")
     }
-    blob = json.dumps(relevant, sort_keys=True, ensure_ascii=False)
+    blob = json.dumps(relevant, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
@@ -62,7 +83,9 @@ class ResultCache:
         )
 
     def key(self, path: str, options: dict) -> str:
-        return f"{sha256_file(path)}:{_options_hash(options)}"
+        # 在线视频等场景 path 为 URL（非本地文件）：对字符串求哈希，避免把 URL 当文件路径打开
+        file_hash = sha256_file(path) if _is_file_path(path) else sha256_text(path)
+        return f"{file_hash}:{_options_hash(options)}"
 
     def get(self, path: str, options: dict) -> Optional[dict]:
         k = self.key(path, options)
