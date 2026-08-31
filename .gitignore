@@ -15,3 +15,7 @@ dist/
 
 # 安全扫描产物
 .codebuddy/
+
+# 验证脚本生成的临时产物（测试运行期生成，非源码，绝不入库）
+_verify_out*/
+tests/fixtures/
