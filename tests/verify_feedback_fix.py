@@ -162,7 +162,7 @@ check("parse_version('0.6.3') == (0,6,3)", upgrade.parse_version("0.6.3") == (0,
 check("parse_version('v1.2') == (1,2)", upgrade.parse_version("v1.2") == (1, 2))
 check("parse_version('\"2.0\"') == (2,0)", upgrade.parse_version('"2.0"') == (2, 0))
 check("parse_version('') is None", upgrade.parse_version("") is None)
-check("parse_version('abc') == (0,)（已知宽松行为：垃圾输入不全为 None）", upgrade.parse_version("abc") == (0,))
+check("parse_version('abc') is None（纯非数字垃圾输入返回 None，避免误判已最新）", upgrade.parse_version("abc") is None)
 check("parse_version('1.2.3.4') == (1,2,3,4)", upgrade.parse_version("1.2.3.4") == (1, 2, 3, 4))
 
 # C2. read_local_version 读真实 VERSION
