@@ -29,6 +29,8 @@ class SourceType:
     VIDEO = "video"            # 本地视频文件：阶段二（文案提取，复用音频转录）
     VIDEO_ONLINE = "video_online"  # 在线/加密视频 URL：阶段五（受限场景）
     VIDEO_ONLINE_ENUM = "video_online_enum"  # 账号/合集枚举（阶段五增强，方案 B）
+    LIVE = "live"              # 直播链接录制（上游需求 P0）：阶段六
+    CAPTURE = "capture"        # 视频采集设备摄取（上游需求 P1）：阶段六
 
 
 @dataclass
