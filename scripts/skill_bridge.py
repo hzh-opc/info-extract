@@ -106,8 +106,36 @@ def has_desensitization() -> bool:
     return self_check(["desensitization"])["desensitization"] is not None
 
 
+def desensitization_skill_name() -> Optional[str]:
+    """返回已检出的脱敏技能名（无则 None）。"""
+    return self_check(["desensitization"])["desensitization"]
+
+
+def enforce_desen_scan_before_external(paths):
+    """外发前强制扫描闸门（「仅组件场景安全审计」P0-①，代码级强制）。
+
+    把「已装即必扫」从 SKILL.md 文字约定升级为**代码断言**：凡外发动作
+    （识别稿交付 / 上云 / 外送）前，调用本函数做两路显式分流：
+
+    - **已装 DESEN（或任意脱敏技能）**：返回 ("must_scan", skill)，调用方
+      **必须**在放行外发前先跑 desen scan（未跑即阻断）——这是本组件的
+      代码级硬闸门，保证 S4「仅组件」部署下「已装即必扫」不绕过。
+    - **未装 DESEN**：返回 ("remind", None)，调用方须「显式提醒 + 本地
+      PII 兜底」（用 pii_scan.scan_text 只读预检）后放行，不随意阻断任务。
+
+    paths 参数供调用方把「待外发文件/文本」传给 desen scan；本函数不直接
+    执行扫描，只给出**必须扫描**的权威信号与技能名，避免与本组件脱敏职责
+    （归 DESEN）耦合过深。
+    """
+    skill = desensitization_skill_name()
+    if skill:
+        return "must_scan", skill
+    return "remind", None
+
+
 if __name__ == "__main__":
     print(json.dumps(self_check(), ensure_ascii=False, indent=2))
 
 
-__all__ = ["COOP_CAPS", "self_check", "has_desensitization"]
+__all__ = ["COOP_CAPS", "self_check", "has_desensitization",
+           "desensitization_skill_name", "enforce_desen_scan_before_external"]

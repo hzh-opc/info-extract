@@ -111,7 +111,7 @@ python router.py "https://www.douyin.com/user/MXoxxxx" --enum-interval 5 --enum-
 - **交付物分区（组件反馈 P0-①）**：默认输出目录拆「交付/存档」两子目录——**交付区**（`.txt` 纠正版 / `.md` 可读版）用户默认只看这里；**存档区**（`.srt` 原始带时间戳 / `.json` 结构化契约 / `.correction.md` 校正过程）仅备查/技能优化。用 `--flat-out` 可降级为平铺（旧行为）。音频/视频转录的交付稿为**带时间码的校正版逐字稿**（`.md` 内，每句 `[HH:MM:SS] 校正文本`）；无纠正模型时交付稿以 `.raw.txt` 后缀显式标记「未校正」。
 - **敏感信息提示（组件反馈 P1-④）**：识别稿落盘后做只读敏感预检（身份证/手机号/银行卡/邮箱等，纯本地正则），命中时在交付汇总提示「检出 N 处，外发前请脱敏」。脱敏动作仍归 DESEN（desensitization-sop），本组件只检测+提示，不重复实现脱敏；`--desensitize` 可显式强化该提示。
 - **能力声明（D9）**：本 SKILL.md 已暴露 `ocr`/`speech_transcription`/`video_transcript`/`image_understanding`/`video_online` 关键词，供 `summarize` 的 skill_bridge 自动发现；当前五者均已就绪（`ocr` 本地 rapidocr 离线、`image_understanding` 本地 VLM 走 ollama、`video_online` 走 yt-dlp 优先 / browser 回退，`router.py --check` 可见可用性，缺失则清晰引导安装）。
-- **隐私闭环（§4）**：敏感预检贯穿到上云门前强制脱敏（已装 DESEN 则调用、未装则提示）；临时文件私有 tmp、处理后即清（审阅 G）。
+- **隐私闭环 + 外发必扫 DESEN 铁律（§4 / 仅组件场景安全审计 P0-①）**：凡外发（识别稿交付 / 上云 / 外送）前，**必须**调用 `skill_bridge.enforce_desen_scan_before_external()` 做代码级两路分流——**已装 DESEN（或任意脱敏技能）→ 返回 `must_scan`，须在放行外发前先跑 `desen scan`（未跑即阻断），这是代码断言而非文字约定；未装 DESEN → 返回 `remind`，须「显式提醒 + 本地 PII 兜底（`pii_scan.scan_text` 只读预检）」后放行，不随意阻断任务**。临时文件私有 tmp、处理后即清（审阅 G）。敏感预检（落盘只读）与上云门强制脱敏仍按组件反馈 P1-④ 执行。
 
 ## 四·五、对话内识别结果展示约定（组件反馈 P1-①）
 
@@ -152,5 +152,7 @@ Agent 交付识别结果时，对话内须按以下卡片结构呈现：
 ### 5.2 协同技能缺失时的降级行为
 
 未检出 `desensitization-sop`（DESEN）时**自动降级、不报错**：本地处理正常进行，仅在需要上云脱敏时由智能体层提示「未安装脱敏技能」；同理 browser 技能缺失时在线加密视频自动回退或提示。检测逻辑见 `scripts/skill_bridge.py`（`python scripts/router.py --check` 可见协同能力可用性）。
+
+> **外发两路分流（「仅组件场景安全审计」落地）**：本组件的 `skill_bridge.py` 提供 `enforce_desen_scan_before_external(paths)`，把「已装即必扫」升级为**代码级强制**——已装 DESEN 时返回 `must_scan`（外发前必须真跑 `desen scan`，未跑即阻断，不靠文字约定自觉）；未装时返回 `remind`（显式提醒 + 本地 `pii_scan` 兜底）。S4「仅组件」部署下同样生效。
 
 详细设计、模块契约、Provider 接口见 `references/reference.md`；决策记录见 `CHANGELOG.md`。
