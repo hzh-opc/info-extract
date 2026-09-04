@@ -153,6 +153,6 @@ Agent 交付识别结果时，对话内须按以下卡片结构呈现：
 
 未检出 `desensitization-sop`（DESEN）时**自动降级、不报错**：本地处理正常进行，仅在需要上云脱敏时由智能体层提示「未安装脱敏技能」；同理 browser 技能缺失时在线加密视频自动回退或提示。检测逻辑见 `scripts/skill_bridge.py`（`python scripts/router.py --check` 可见协同能力可用性）。
 
-> **外发两路分流（「仅组件场景安全审计」落地）**：本组件的 `skill_bridge.py` 提供 `enforce_desen_scan_before_external(paths)`，把「已装即必扫」升级为**代码级强制**——已装 DESEN 时返回 `must_scan`（外发前必须真跑 `desen scan`，未跑即阻断，不靠文字约定自觉）；未装时返回 `remind`（显式提醒 + 本地 `pii_scan` 兜底）。S4「仅组件」部署下同样生效。
+> **外发两路分流（「仅组件场景安全审计」落地，2026-09-04 按套件政策放宽为提示）**：本组件的 `skill_bridge.py` 提供 `enforce_desen_scan_before_external(paths)`——已装 DESEN 时返回 `prompt`（外发前建议跑 `desen scan`，命中敏感信息仅提示、不阻断）；未装时返回 `remind`（显式提醒 + 本地 `pii_scan` 兜底）。与套件层「显式外发直接放行、隐性外发仅提示不阻断」口径一致。
 
 详细设计、模块契约、Provider 接口见 `references/reference.md`；决策记录见 `CHANGELOG.md`。

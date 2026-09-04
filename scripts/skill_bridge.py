@@ -112,24 +112,23 @@ def desensitization_skill_name() -> Optional[str]:
 
 
 def enforce_desen_scan_before_external(paths):
-    """外发前强制扫描闸门（「仅组件场景安全审计」P0-①，代码级强制）。
+    """外发前提示闸门（「仅组件场景安全审计」P0-①，2026-09-04 按套件政策放宽为提示）。
 
-    把「已装即必扫」从 SKILL.md 文字约定升级为**代码断言**：凡外发动作
+    按套件外发安全政策（显式外发直接放行、隐性外发仅提示不阻断）：凡外发动作
     （识别稿交付 / 上云 / 外送）前，调用本函数做两路显式分流：
 
-    - **已装 DESEN（或任意脱敏技能）**：返回 ("must_scan", skill)，调用方
-      **必须**在放行外发前先跑 desen scan（未跑即阻断）——这是本组件的
-      代码级硬闸门，保证 S4「仅组件」部署下「已装即必扫」不绕过。
+    - **已装 DESEN（或任意脱敏技能）**：返回 ("prompt", skill)，调用方**建议**
+      在放行外发前先跑 desen scan（命中敏感信息仅提示、不阻断）——与套件层
+      `_external_gate` 对 IMPLICIT_EXTERNAL 的口径一致，不再硬阻断。
     - **未装 DESEN**：返回 ("remind", None)，调用方须「显式提醒 + 本地
       PII 兜底」（用 pii_scan.scan_text 只读预检）后放行，不随意阻断任务。
 
     paths 参数供调用方把「待外发文件/文本」传给 desen scan；本函数不直接
-    执行扫描，只给出**必须扫描**的权威信号与技能名，避免与本组件脱敏职责
-    （归 DESEN）耦合过深。
+    执行扫描，只给出权威信号与技能名，避免与本组件脱敏职责（归 DESEN）耦合过深。
     """
     skill = desensitization_skill_name()
     if skill:
-        return "must_scan", skill
+        return "prompt", skill
     return "remind", None
 
 
