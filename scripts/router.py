@@ -166,6 +166,9 @@ def build_options(args) -> Dict:
         "no_correct": getattr(args, "no_correct", False),
         "context": getattr(args, "context", None),
         "correct_model": getattr(args, "correct_model", None),
+        # 组件反馈「交互与展示优化」：交付物分区 + 敏感预检
+        "flat_out": getattr(args, "flat_out", False),
+        "desensitize": getattr(args, "desensitize", False),
         # 阶段五 在线/加密视频：用户提供本地录制文件走浏览器捕获回退（--capture-path）
         "capture_path": getattr(args, "capture_path", None),
         # 阶段五增强（方案 B）：账号/合集枚举 + cookie 适配（抖音/小红书/B站 等）
@@ -262,6 +265,12 @@ def main(argv: List[str] | None = None) -> int:
                         help="纠正版稿件的语境/上下文（D16）：提供给本地模型用于消歧，如领域/术语/专有名词")
     parser.add_argument("--correct-model", default=None,
                         help="纠正用本地文本模型（ollama 标签，默认 qwen2.5:7b；需本机已拉取，零新依赖）")
+    # 组件反馈「交互与展示优化」：交付物分区 + 敏感预检
+    parser.add_argument("--flat-out", action="store_true",
+                        help="输出目录不拆「交付/存档」分区，平铺到输出目录（组件反馈 P0-① 降级，旧行为）")
+    parser.add_argument("--desensitize", "--redact-pii", action="store_true",
+                        help="交付前对识别稿做敏感信息检测并在交付卡片提示（组件反馈 P1-④；脱敏动作仍归 DESEN，"
+                             "本开关仅强化检测提示，如需真正脱敏请用 desensitization-sop）")
     # 阶段五 在线/加密视频选项
     parser.add_argument("--capture-path", default=None,
                         help="在线/加密视频：指定本地录制文件路径（播放中捕获产物），走 BrowserCapture 回退（§4 边界 #2）")
@@ -374,6 +383,9 @@ def main(argv: List[str] | None = None) -> int:
         groups.setdefault(stype, []).append(path)
 
     options = build_options(args)
+    # 组件反馈 P0-①：--flat-out 通过环境变量兜底到所有 output 调用点（含无 options 的 recorder）
+    if options.get("flat_out"):
+        os.environ["INFO_EXTRACT_FLAT_OUT"] = "1"
     all_results = []
 
     if not args.quiet and not args.json:
@@ -454,10 +466,25 @@ def main(argv: List[str] | None = None) -> int:
                                   f"副本未保存(D3)，仅产出文案/字幕")
                             if r.fields.get("legal_risk_warning"):
                                 print(f"   ⚠️ {r.fields.get('legal_risk_warning')}")
-                    # D16 纠正版稿件状态（透明回显，D15/§4.7 同构）
+                    # D16 纠正版稿件状态（透明回显，D15/§4.7 同构）——组件反馈 P2-①：五态细分提示
                     cm = r.provider_meta.get("correction") if isinstance(r.provider_meta, dict) else None
                     if cm:
-                        print(f"   纠正(D16)：{cm['status']}" + (f"（{cm.get('model')}）" if cm.get('model') else ""))
+                        status = cm.get("status")
+                        print(f"   纠正(D16)：{status}" + (f"（{cm.get('model')}）" if cm.get('model') else ""))
+                        if status == "skipped:no-model":
+                            print(f"   ℹ️ 本机未配置纠正模型，可运行 `ollama pull qwen2.5:7b` 启用本地纠正")
+                        elif status == "skipped:error":
+                            print(f"   ⚠️ 纠正失败（模型不可达/超时），已保留原始识别")
+                        elif status == "skipped:empty":
+                            print(f"   ⚠️ 纠正模型未返回有效文本，已保留原始识别")
+                    # 组件反馈 P1-②：无纠正模型时显式降级提示（交付物=未校正识别稿）
+                    if r.corrected is None and r.source in (SourceType.TRANSCRIPT, SourceType.OCR, SourceType.VISION, SourceType.VIDEO, SourceType.VIDEO_ONLINE):
+                        print(f"   ⚠️ 本次未生成纠正版，以下为原始识别稿，仅供参考（未校正）")
+                    # 组件反馈 P1-④：敏感信息提示行（落盘后只读扫描结果）
+                    pii = r.media_ref.get("pii_scan") if isinstance(r.media_ref, dict) else None
+                    if pii and pii.get("total"):
+                        kinds = "、".join(f"{k.get('label')}×{k.get('count')}" for k in pii.get("kinds", []))
+                        print(f"   🔒 敏感信息：检出 {pii.get('total')} 处（{kinds}），外发前请脱敏（desensitization-sop）")
                     # D15 质量评分：透明回显质量档与建议（quality_scorer 驱动自动升级）
                     q = score(r)
                     qual = f"   质量：{q['quality']}"
